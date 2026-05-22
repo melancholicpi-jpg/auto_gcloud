@@ -75,9 +75,12 @@ jobs:
             --tag=${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ env.SERVICE_NAME }}:latest \
             --machine-type=e2-medium \
             --timeout=20m \
-            --gcs-log-dir=gs://image.aihubflux.com/logs \
-            --suppress-logs \
-            .
+            --gcs-log-dir=gs://${{ env.GCS_BUCKET }}/logs \
+            . || {
+              echo "::error::Cloud Build failed. Fetching logs..."
+              gcloud logging read "resource.type=build AND resource.labels.build_id=$(gcloud builds list --project=${{ env.GCP_PROJECT }} --region=${{ env.REGION }} --limit=1 --format='value(id)')" --project=${{ env.GCP_PROJECT }} --limit=50
+              exit 1
+            }
 
       - name: Deploy to Cloud Run
         run: |
