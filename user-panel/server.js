@@ -1,5 +1,4 @@
 const express = require('express');
-const multer = require('multer');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
@@ -15,6 +14,7 @@ const VPC_CONNECTOR = process.env.VPC_CONNECTOR || 'nexus-connector-v2';
 const DNS_ZONE = process.env.DNS_ZONE || 'my-domain-zone';
 const REGISTRY = `${REGION}-docker.pkg.dev`;
 const KEY_FILE = process.env.GOOGLE_APPLICATION_CREDENTIALS || path.join(__dirname, '..', 'gcs-service-account.json');
+const UPLOAD_URL_EXPIRY = 60 * 60 * 1000;
 
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -24,21 +24,6 @@ function getProjectDir(projectId) {
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
-
-const diskStorage = multer.diskStorage({
-  destination: (req, _file, cb) => {
-    const projectId = req.body.projectId || req.params?.projectId || 'unknown';
-    cb(null, getProjectDir(projectId));
-  },
-  filename: (_req, file, cb) => {
-    cb(null, file.originalname);
-  }
-});
-
-const upload = multer({
-  storage: diskStorage,
-  limits: { fileSize: 2 * 1024 * 1024 * 1024 }
-});
 
 let storage = null;
 try {
@@ -88,61 +73,6 @@ ${Object.entries(defaults).map(([k, v]) => `  ${k}: "${v}"`).join('\n')}
 `;
 }
 
-async function uploadToGCS(projectId) {
-  const key = projectId;
-  if (gcsUploadStatus.get(key)?.status === 'uploading') return;
-
-  const dir = getProjectDir(projectId);
-  const files = fs.readdirSync(dir);
-  const tarFile = files.find(f => f.endsWith('.tar'));
-  const yamlFile = files.find(f => f === 'user-config.yaml' || f.endsWith('.yaml'));
-
-  if (!storage || !tarFile) {
-    gcsUploadStatus.set(key, {
-      status: 'failed',
-      error: !storage ? 'GCS客户端未初始化' : '缺少tar文件'
-    });
-    return;
-  }
-
-  gcsUploadStatus.set(key, { status: 'uploading', startedAt: new Date().toISOString() });
-
-  const bucket = storage.bucket(GCS_BUCKET);
-  const prefix = `projects/${projectId}`;
-
-  try {
-    console.log(`[${projectId}] 开始GCS上传: gs://${GCS_BUCKET}/${prefix}/`);
-    await bucket.upload(path.join(dir, tarFile), {
-      destination: `${prefix}/${tarFile}`,
-      resumable: true
-    });
-    console.log(`[${projectId}] 镜像上传成功: ${tarFile}`);
-
-    await bucket.upload(path.join(dir, yamlFile), {
-      destination: `${prefix}/${yamlFile}`
-    });
-    console.log(`[${projectId}] YAML上传成功`);
-
-    gcsUploadStatus.set(key, {
-      status: 'done',
-      completedAt: new Date().toISOString(),
-      prefix
-    });
-    console.log(`[${projectId}] ✅ GCS同步完成`);
-  } catch (err) {
-    const errMsg = err.message || String(err);
-    console.error(`[${projectId}] GCS上传失败: ${errMsg}`);
-    if (errMsg.includes('oauth2') || errMsg.includes('token') || errMsg.includes('ENOTFOUND') || errMsg.includes('ECONNREFUSED')) {
-      console.error(`[${projectId}] 网络不通，无法连接Google OAuth，请在能访问Google网络的服务器上运行`);
-    }
-    gcsUploadStatus.set(key, {
-      status: 'failed',
-      error: errMsg.slice(0, 200),
-      failedAt: new Date().toISOString()
-    });
-  }
-}
-
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -176,14 +106,39 @@ app.get('/api/generate-template', (req, res) => {
   }) });
 });
 
-app.post('/api/submit', upload.fields([
-  { name: 'projectImage', maxCount: 1 },
-  { name: 'configYaml', maxCount: 1 }
-]), async (req, res) => {
-  console.log('=== 收到提交请求 ===');
+app.post('/api/init-upload', async (req, res) => {
+  const { projectId, fileName } = req.body;
+  if (!projectId || !validateProjectId(projectId)) {
+    return res.status(400).json({ error: '项目ID无效' });
+  }
+  if (!fileName) {
+    return res.status(400).json({ error: '缺少文件名' });
+  }
+  if (!storage) {
+    return res.status(500).json({ error: 'GCS客户端未初始化' });
+  }
 
-  const files = req.files || {};
-  const { projectId, subdomain } = req.body;
+  const gcsPath = `projects/${projectId}/${fileName}`;
+  const file = storage.bucket(GCS_BUCKET).file(gcsPath);
+
+  try {
+    const [url] = await file.getSignedUrl({
+      action: 'write',
+      expires: Date.now() + UPLOAD_URL_EXPIRY,
+      contentType: 'application/x-tar'
+    });
+    console.log(`[${projectId}] 已生成签名URL: ${gcsPath}`);
+    res.json({ uploadUrl: url, gcsPath, bucket: GCS_BUCKET });
+  } catch (err) {
+    console.error(`[${projectId}] 签名URL生成失败:`, err.message);
+    res.status(500).json({ error: '签名URL生成失败: ' + err.message });
+  }
+});
+
+app.post('/api/submit', async (req, res) => {
+  console.log('=== 收到部署提交 ===');
+
+  const { projectId, subdomain, gcsPath, envVars } = req.body;
 
   if (!projectId || !validateProjectId(projectId)) {
     return res.status(400).json({ error: '项目ID无效' });
@@ -191,60 +146,77 @@ app.post('/api/submit', upload.fields([
   if (!subdomain || !validateSubdomain(subdomain)) {
     return res.status(400).json({ error: '二级域名无效' });
   }
-
-  const imageFile = files.projectImage?.[0];
-  if (!imageFile) {
-    return res.status(400).json({ error: '缺少项目镜像' });
+  if (!gcsPath) {
+    return res.status(400).json({ error: '缺少GCS文件路径' });
+  }
+  if (!storage) {
+    return res.status(500).json({ error: 'GCS客户端未初始化' });
   }
 
   const dir = getProjectDir(projectId);
-  let yamlContent;
+  const imageName = path.basename(gcsPath).replace('.tar', '');
 
-  if (files.configYaml?.[0]) {
-    yamlContent = fs.readFileSync(files.configYaml[0].path, 'utf-8');
-    try { YAML.parse(yamlContent); } catch {
-      return res.status(400).json({ error: 'YAML 格式错误' });
-    }
-  } else {
-    yamlContent = buildConfigYaml({
-      projectId, subdomain,
-      imageName: imageFile.originalname.replace('.tar', ''),
-      tag: 'latest', envVars: {}
-    });
-  }
+  const yamlContent = buildConfigYaml({
+    projectId, subdomain,
+    imageName,
+    tag: 'latest',
+    envVars: envVars || {}
+  });
 
   const yamlPath = path.join(dir, 'user-config.yaml');
   fs.writeFileSync(yamlPath, yamlContent);
 
-  console.log(`[${projectId}] 本地保存完成，文件: ${fs.readdirSync(dir).join(', ')}`);
+  console.log(`[${projectId}] YAML 已生成: ${gcsPath}`);
+
+  try {
+    const bucket = storage.bucket(GCS_BUCKET);
+    const yamlGcsPath = `projects/${projectId}/user-config.yaml`;
+    await bucket.file(yamlGcsPath).save(yamlContent, {
+      contentType: 'application/x-yaml'
+    });
+    console.log(`[${projectId}] YAML 已上传到 GCS: ${yamlGcsPath}`);
+  } catch (err) {
+    console.error(`[${projectId}] YAML GCS上传失败:`, err.message);
+  }
+
+  console.log(`[${projectId}] 部署已提交，镜像: gs://${GCS_BUCKET}/${gcsPath}`);
 
   res.json({
     success: true,
     projectId,
     subdomain,
     expectedDomain: `https://${subdomain}.${ROOT_DOMAIN}`,
-    message: '文件已保存到服务器，正在同步至GCS，预计1-3分钟后可通过域名访问'
+    gcsPath,
+    message: '部署已提交，Cloud Function 将在检测到文件后自动部署'
   });
-
-  uploadToGCS(projectId);
 });
 
 app.get('/api/upload-status/:projectId', async (req, res) => {
   const { projectId } = req.params;
   const dir = getProjectDir(projectId);
-  const files = fs.readdirSync(dir);
+  let localFiles = [];
+  try {
+    localFiles = fs.readdirSync(dir).map(f => {
+      const stat = fs.statSync(path.join(dir, f));
+      return { name: f, size: stat.size };
+    });
+  } catch (_) {}
 
   const gcs = gcsUploadStatus.get(projectId);
-  const localFiles = files.map(f => {
-    const stat = fs.statSync(path.join(dir, f));
-    return { name: f, size: stat.size };
-  });
-
   res.json({
     projectId,
     localFiles,
     gcsStatus: gcs?.status || 'pending',
     gcsError: gcs?.error || null
+  });
+});
+
+app.get('/api/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    gcsReady: !!storage,
+    bucket: GCS_BUCKET,
+    rootDomain: ROOT_DOMAIN
   });
 });
 

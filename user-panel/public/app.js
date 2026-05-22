@@ -35,11 +35,11 @@ function validateStep(step) {
     var projectId = document.getElementById('projectId').value.trim();
     var subdomain = document.getElementById('subdomain').value.trim();
     if (!projectId || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(projectId) || projectId.length < 3) {
-      showToast('项目 ID 格式无效 (3-63位小写字母/数字/短横线)', 'error');
+      showToast('项目 ID 格式无效', 'error');
       return false;
     }
     if (!subdomain || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(subdomain) || subdomain.length < 3 || subdomain.length > 20) {
-      showToast('二级域名格式无效 (3-20位小写字母/数字/短横线)', 'error');
+      showToast('二级域名格式无效', 'error');
       return false;
     }
     document.getElementById('domainSuffix').textContent = '.' + ROOT_DOMAIN;
@@ -143,39 +143,62 @@ function updateYamlPreview() {
 function submitDeploy() {
   var submitBtn = document.getElementById('submitBtn');
   submitBtn.disabled = true;
-  submitBtn.textContent = '\u23f3 上传中...';
+  submitBtn.textContent = '\u23f3 准备中...';
 
   var projectId = document.getElementById('projectId').value.trim();
   var subdomain = document.getElementById('subdomain').value.trim();
 
-  var formData = new FormData();
-  formData.append('projectId', projectId);
-  formData.append('subdomain', subdomain);
-  formData.append('projectImage', projectFile);
+  showUploadProgressBar(true);
+  updateUploadProgress(0, '0 KB / ' + formatSize(projectFile.size));
 
-  var yamlLines = [];
-  yamlLines.push('user:');
-  yamlLines.push('  project_id: "' + projectId + '"');
-  yamlLines.push('  subdomain: "' + subdomain + '"');
-  yamlLines.push('');
-  yamlLines.push('image:');
-  yamlLines.push('  name: "' + projectFile.name.replace('.tar', '') + '"');
-  yamlLines.push('  tag: "latest"');
-  yamlLines.push('');
-  yamlLines.push('cloud_run:');
-  yamlLines.push('  cpu: 2');
-  yamlLines.push('  memory: "4Gi"');
-  yamlLines.push('  port: 3000');
-  yamlLines.push('  min_instances: 1');
-  yamlLines.push('  max_instances: 10');
-  yamlLines.push('');
-  yamlLines.push('env:');
-  envVars.filter(function(e) { return e.key; }).forEach(function(e) {
-    yamlLines.push('  ' + e.key + ': "' + e.value + '"');
+  initUpload(projectId, function(err, uploadInfo) {
+    if (err) {
+      showToast('获取上传地址失败: ' + err, 'error');
+      resetSubmitBtn(submitBtn);
+      return;
+    }
+
+    submitBtn.textContent = '\u23f3 上传至 GCS...';
+    uploadToGCS(uploadInfo.uploadUrl, projectFile, function(uploadErr) {
+      if (uploadErr) {
+        showToast('上传镜像失败: ' + uploadErr, 'error');
+        resetSubmitBtn(submitBtn);
+        return;
+      }
+
+      updateUploadProgress(100, formatSize(projectFile.size) + ' / ' + formatSize(projectFile.size));
+
+      submitBtn.textContent = '\u23f3 提交部署...';
+      var envObj = {};
+      envVars.filter(function(e) { return e.key; }).forEach(function(e) {
+        envObj[e.key] = e.value;
+      });
+
+      postJSON('/api/submit', {
+        projectId: projectId,
+        subdomain: subdomain,
+        gcsPath: uploadInfo.gcsPath,
+        envVars: envObj
+      }, function(submitErr, result) {
+        if (submitErr) {
+          showToast('提交失败: ' + submitErr, 'error');
+          resetSubmitBtn(submitBtn);
+          return;
+        }
+        setTimeout(function() { showResult(result); }, 400);
+      });
+    });
   });
-  var yamlBlob = new Blob([yamlLines.join('\n')], { type: 'application/x-yaml' });
-  formData.append('configYaml', yamlBlob, 'user-config.yaml');
+}
 
+function initUpload(projectId, callback) {
+  postJSON('/api/init-upload', {
+    projectId: projectId,
+    fileName: projectFile.name
+  }, callback);
+}
+
+function uploadToGCS(uploadUrl, file, callback) {
   var xhr = new XMLHttpRequest();
 
   xhr.upload.addEventListener('progress', function(e) {
@@ -187,37 +210,51 @@ function submitDeploy() {
 
   xhr.addEventListener('load', function() {
     if (xhr.status >= 200 && xhr.status < 300) {
-      var result = JSON.parse(xhr.responseText);
-      if (result.success) {
-        updateUploadProgress(100, formatSize(projectFile.size) + ' / ' + formatSize(projectFile.size));
-        setTimeout(function() { showResult(result); }, 400);
-      } else {
-        showToast(result.error || '提交失败', 'error');
-        resetSubmitBtn(submitBtn);
-      }
+      callback(null);
     } else {
-      var errMsg = '服务器错误 (' + xhr.status + ')';
+      var msg = 'GCS 上传失败 (HTTP ' + xhr.status + ')';
       try {
         var r = JSON.parse(xhr.responseText);
-        errMsg = r.error || errMsg;
-      } catch (_) {}
-      showToast(errMsg, 'error');
-      resetSubmitBtn(submitBtn);
+        msg = r.error || msg;
+      } catch(_) {}
+      callback(msg);
     }
   });
 
   xhr.addEventListener('error', function() {
-    showToast('网络错误，请检查服务器是否运行', 'error');
-    resetSubmitBtn(submitBtn);
+    callback('网络错误，无法连接到 GCS');
   });
 
-  xhr.addEventListener('abort', function() {
-    resetSubmitBtn(submitBtn);
+  xhr.addEventListener('timeout', function() {
+    callback('上传超时');
   });
 
-  showUploadProgressBar(true);
-  xhr.open('POST', '/api/submit');
-  xhr.send(formData);
+  xhr.open('PUT', uploadUrl);
+  xhr.setRequestHeader('Content-Type', 'application/x-tar');
+  xhr.timeout = 1800000;
+  xhr.send(file);
+}
+
+function postJSON(url, data, callback) {
+  var xhr = new XMLHttpRequest();
+  xhr.addEventListener('load', function() {
+    if (xhr.status >= 200 && xhr.status < 300) {
+      callback(null, JSON.parse(xhr.responseText));
+    } else {
+      var msg = '服务器错误 (' + xhr.status + ')';
+      try {
+        var r = JSON.parse(xhr.responseText);
+        msg = r.error || msg;
+      } catch(_) {}
+      callback(msg);
+    }
+  });
+  xhr.addEventListener('error', function() {
+    callback('网络错误');
+  });
+  xhr.open('POST', url);
+  xhr.setRequestHeader('Content-Type', 'application/json');
+  xhr.send(JSON.stringify(data));
 }
 
 function resetSubmitBtn(btn) {
@@ -252,7 +289,7 @@ function showResult(result) {
   document.getElementById('resultDomain').innerHTML =
     '<a href="' + result.expectedDomain + '" target="_blank">' + result.expectedDomain + '</a>';
 
-  showToast('文件已上传到服务器，后台同步至 GCS', 'success');
+  showToast('文件已上传至 GCS，等待自动部署', 'success');
 }
 
 function showToast(message, type) {
@@ -289,10 +326,18 @@ document.getElementById('deployForm').addEventListener('submit', function(e) {
 });
 
 function formatSize(bytes) {
+  if (!bytes) return '0 B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
   if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
 }
+
+fetch('/api/health')
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    ROOT_DOMAIN = data.rootDomain || ROOT_DOMAIN;
+  })
+  .catch(function() {});
 
 setStep(1);
 renderEnvRows();
