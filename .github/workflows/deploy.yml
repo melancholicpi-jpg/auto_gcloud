@@ -42,11 +42,14 @@ jobs:
             cloudbuild.googleapis.com \
             --project=${{ env.GCP_PROJECT }}
 
-      - name: Configure GCS CORS
+      - name: Configure GCS CORS (skip if no permission)
+        continue-on-error: true
         run: |
+          echo "正在配置 GCS CORS..."
           gcloud storage buckets update gs://${{ env.GCS_BUCKET }} \
             --cors-file=gcs-cors.json \
-            --project=${{ env.GCP_PROJECT }}
+            --project=${{ env.GCP_PROJECT }} \
+            || echo "::warning::CORS 配置失败，请用 gcs-service-account 手动执行: gcloud storage buckets update gs://${{ env.GCS_BUCKET }} --cors-file=gcs-cors.json"
 
       - name: Upload GCS credentials to Secret Manager
         run: |
