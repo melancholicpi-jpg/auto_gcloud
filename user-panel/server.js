@@ -18,7 +18,7 @@ const REGISTRY = `${REGION}-docker.pkg.dev`;
 const KEY_FILE = process.env.GOOGLE_APPLICATION_CREDENTIALS || path.join(__dirname, '..', 'gcs-service-account.json');
 const CHUNK_SIZE = 5 * 1024 * 1024;
 
-const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
+const UPLOADS_DIR = '/tmp/uploads';
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 function getProjectDir(projectId) {

@@ -8,7 +8,7 @@ RUN npm ci --omit=dev
 COPY user-panel/ ./user-panel/
 COPY templates/ ./templates/
 
-RUN mkdir -p /app/uploads
+RUN mkdir -p /tmp/uploads
 
 ENV PORT=8080
 ENV NODE_ENV=production
