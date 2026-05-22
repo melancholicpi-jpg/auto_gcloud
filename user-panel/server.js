@@ -15,7 +15,7 @@ const AR_REPO = process.env.AR_REPO || 'my-app-repo';
 const VPC_CONNECTOR = process.env.VPC_CONNECTOR || 'nexus-connector-v2';
 const DNS_ZONE = process.env.DNS_ZONE || 'my-domain-zone';
 const REGISTRY = `${REGION}-docker.pkg.dev`;
-const KEY_FILE = process.env.GOOGLE_APPLICATION_CREDENTIALS || path.join(__dirname, '..', 'gcs-service-account.json');
+const KEY_FILE = process.env.GCS_KEY_FILE || process.env.GOOGLE_APPLICATION_CREDENTIALS || path.join(__dirname, '..', 'gcs-service-account.json');
 const CHUNK_SIZE = 5 * 1024 * 1024;
 
 const UPLOADS_DIR = '/tmp/uploads';
@@ -45,8 +45,7 @@ try {
   console.log('GCS 客户端已初始化');
 
   cloudBuild = new CloudBuildClient({
-    projectId: GCP_PROJECT,
-    keyFilename: KEY_FILE
+    projectId: GCP_PROJECT
   });
   console.log('Cloud Build 客户端已初始化');
 } catch (err) {

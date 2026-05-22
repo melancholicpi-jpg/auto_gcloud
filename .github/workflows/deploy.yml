@@ -106,7 +106,7 @@ jobs:
             --concurrency=80 \
             --timeout=600 \
             --allow-unauthenticated \
-            --set-env-vars="GCS_BUCKET=${{ env.GCS_BUCKET }},ROOT_DOMAIN=${{ env.ROOT_DOMAIN }},REGION=${{ env.REGION }},GCP_PROJECT=${{ env.GCP_PROJECT }},AR_REPO=${{ env.AR_REPO }},VPC_CONNECTOR=nexus-connector-v2,DNS_ZONE=my-domain-zone,GOOGLE_APPLICATION_CREDENTIALS=${{ env.SECRET_MOUNT_PATH }}/gcs-service-account.json" \
+            --set-env-vars="GCS_BUCKET=${{ env.GCS_BUCKET }},ROOT_DOMAIN=${{ env.ROOT_DOMAIN }},REGION=${{ env.REGION }},GCP_PROJECT=${{ env.GCP_PROJECT }},AR_REPO=${{ env.AR_REPO }},VPC_CONNECTOR=nexus-connector-v2,DNS_ZONE=my-domain-zone,GCS_KEY_FILE=${{ env.SECRET_MOUNT_PATH }}/gcs-service-account.json" \
             --set-secrets="${{ env.SECRET_MOUNT_PATH }}/gcs-service-account.json=${{ env.SECRET_NAME }}:latest" \
             --no-cpu-throttling
 
