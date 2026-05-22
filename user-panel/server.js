@@ -239,9 +239,9 @@ async function submitCloudBuildDeploy(session, projectId, subdomain, imageName, 
             `docker tag $LOADED_TAG ${imageUrl}`,
             `docker push ${imageUrl}`,
             `gcloud run deploy ${serviceName} --image=${imageUrl} --platform=managed --region=${REGION} --port=3000 --cpu=2 --memory=4Gi --min-instances=1 --max-instances=10 --allow-unauthenticated --concurrency=80 --timeout=600 --no-cpu-throttling --quiet` + (envString ? ` --set-env-vars="${envString}"` : ''),
-            `gcloud run domain-mappings create --service=${serviceName} --domain=${subdomain}.${ROOT_DOMAIN} --region=${REGION} --quiet 2>/dev/null || echo "域名可能已绑定，跳过"`,
             `SERVICE_URL=$(gcloud run services describe ${serviceName} --region=${REGION} --format="value(status.url)")`,
-            `echo "DEPLOY_DONE: ${serviceName} => $SERVICE_URL => https://${subdomain}.${ROOT_DOMAIN}"`
+            `echo "URL: $SERVICE_URL"`,
+            `echo $SERVICE_URL | gsutil cp - gs://${GCS_BUCKET}/projects/${projectId}/service-url.txt`
           ].join('\n')
         ]
       }
@@ -360,23 +360,37 @@ app.post('/api/complete-upload/:sessionId', (req, res) => {
     processing: true,
     projectId,
     subdomain,
-    expectedDomain: `https://${subdomain}.${ROOT_DOMAIN}`,
-    message: '分片已完整接收，正在后台组装并上传 GCS，请稍候查看状态'
+    message: '分片已完整接收，正在后台组装 → 上传 GCS → 自动部署 Cloud Run，请稍候查看状态'
   });
 });
 
-app.get('/api/deploy-status/:sessionId', (req, res) => {
+app.get('/api/deploy-status/:sessionId', async (req, res) => {
   const session = sessions.get(req.params.sessionId);
   if (!session) {
     return res.json({ status: 'gone', message: '部署已完成或会话已过期' });
   }
+
+  if (!session.serviceUrl && session.status === 'deploying' && session.projectId && storage) {
+    try {
+      const [data] = await storage.bucket(GCS_BUCKET)
+        .file(`projects/${session.projectId}/service-url.txt`)
+        .download();
+      const url = data.toString().trim();
+      if (url && url.startsWith('https://')) {
+        session.serviceUrl = url;
+        session.status = 'done';
+        console.log(`[${session.projectId}] 服务已部署: ${url}`);
+      }
+    } catch (_) {}
+  }
+
   const result = {
     status: session.status || 'received',
     totalChunks: session.totalChunks,
     receivedChunks: session.receivedChunks ? session.receivedChunks.size : 0,
     projectId: session.projectId,
     subdomain: session.subdomain,
-    expectedDomain: session.subdomain ? `https://${session.subdomain}.${ROOT_DOMAIN}` : null
+    serviceUrl: session.serviceUrl || null
   };
   if (session.error) result.error = session.error;
   if (session.buildId) result.buildId = session.buildId;

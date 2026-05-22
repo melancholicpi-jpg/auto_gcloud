@@ -253,7 +253,7 @@ function completeUpload(sessionId, callback) {
   }, function(err, result) {
     if (err) return callback(err);
     if (result.processing) {
-      pollDeployStatus(sessionId, result.expectedDomain, function(pollErr, finalResult) {
+      pollDeployStatus(sessionId, function(pollErr, finalResult) {
         callback(pollErr, finalResult || result);
       });
     } else {
@@ -262,7 +262,7 @@ function completeUpload(sessionId, callback) {
   });
 }
 
-function pollDeployStatus(sessionId, expectedDomain, callback) {
+function pollDeployStatus(sessionId, callback) {
   showUploadProgress(true, '正在后台组装文件...');
   var attempts = 0;
   var maxAttempts = 120;
@@ -278,14 +278,14 @@ function pollDeployStatus(sessionId, expectedDomain, callback) {
         return;
       }
 
-      if (status.status === 'done') {
+      if (status.status === 'done' || status.serviceUrl) {
         showUploadProgressBar(false);
         callback(null, {
           success: true,
           projectId: status.projectId,
           subdomain: status.subdomain,
-          expectedDomain: status.expectedDomain || expectedDomain,
-          message: '镜像已上传至 GCS，等待自动部署'
+          serviceUrl: status.serviceUrl,
+          message: 'Cloud Run 已部署完成'
         });
         return;
       }
@@ -386,10 +386,12 @@ function showResult(result) {
   panel.classList.remove('hidden');
 
   document.getElementById('resultIcon').textContent = '\u2705';
-  document.getElementById('resultTitle').textContent = '上传完成';
+  document.getElementById('resultTitle').textContent = '部署成功';
   document.getElementById('resultMessage').textContent = result.message;
-  document.getElementById('resultDomain').innerHTML =
-    '<a href="' + result.expectedDomain + '" target="_blank">' + result.expectedDomain + '</a>';
+  var url = result.serviceUrl;
+  document.getElementById('resultDomain').innerHTML = url
+    ? '<a href="' + url + '" target="_blank">' + url + '</a>'
+    : '等待 Cloud Run 分配地址...';
 
   showToast('文件已上传至服务器并同步 GCS，等待部署', 'success');
 }
