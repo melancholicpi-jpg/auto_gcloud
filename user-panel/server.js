@@ -246,7 +246,7 @@ async function submitCloudBuildDeploy(session, projectId, subdomain, imageName, 
         ]
       }
     ],
-    timeout: '1800s',
+    timeout: { seconds: 1800 },
     logsBucket: `gs://${GCS_BUCKET}/logs`
   };
 
