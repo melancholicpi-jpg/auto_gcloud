@@ -1,0 +1,20 @@
+# ====================== 用户配置（仅修改标★字段） ======================
+user:
+  project_id: "my-project-001"    # ★ 用户自定义项目ID（唯一标识）
+  subdomain: "admin"              # ★ 二级域名（最终：admin.aihubflux.com）
+
+image:
+  name: "project-app"             # ★ 镜像名称（与 .tar 文件名一致，不含扩展名）
+  tag: "latest"                   # 镜像标签
+
+cloud_run:
+  cpu: 2
+  memory: "4Gi"
+  port: 3000
+  min_instances: 1
+  max_instances: 10
+
+env:
+  NODE_ENV: "production"
+  API_URL: "https://{{subdomain}}.aihubflux.com"
+  CORS_ORIGIN: "https://{{subdomain}}.aihubflux.com"

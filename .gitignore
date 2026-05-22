@@ -1,0 +1,10 @@
+node_modules/
+uploads/
+tmp-*
+*.tar
+.env
+.gcloudignore
+.DS_Store
+deploy-result.json
+deploy.log
+*-service-account.json

@@ -1,0 +1,14 @@
+node_modules/
+uploads/
+tmp-*
+*.tar
+.env
+.git
+.DS_Store
+deploy-result.json
+deploy.log
+*-service-account.json
+*.md
+cloud-function/
+scripts/
+方案.md

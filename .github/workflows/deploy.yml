@@ -1,0 +1,124 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGION: asia-east1
+  GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+  GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+  ROOT_DOMAIN: ${{ secrets.ROOT_DOMAIN }}
+  AR_REPO: my-app-repo
+  SERVICE_NAME: auto-gcloud-panel
+  SECRET_NAME: gcs-service-account
+  SECRET_MOUNT_PATH: /app/secrets
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Auth GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT }}
+
+      - name: Enable APIs
+        run: |
+          gcloud services enable \
+            run.googleapis.com \
+            artifactregistry.googleapis.com \
+            secretmanager.googleapis.com \
+            cloudbuild.googleapis.com \
+            --project=${{ secrets.GCP_PROJECT }}
+
+      - name: Upload GCS credentials to Secret Manager
+        run: |
+          echo '${{ secrets.GCS_CREDENTIALS_JSON }}' > /tmp/creds.json
+          if gcloud secrets describe ${SECRET_NAME} --project=${{ secrets.GCP_PROJECT }} &>/dev/null 2>&1; then
+            gcloud secrets versions add ${SECRET_NAME} \
+              --data-file=/tmp/creds.json \
+              --project=${{ secrets.GCP_PROJECT }}
+          else
+            gcloud secrets create ${SECRET_NAME} \
+              --data-file=/tmp/creds.json \
+              --project=${{ secrets.GCP_PROJECT }} \
+              --replication-policy=automatic
+          fi
+
+      - name: Create Artifact Registry (if not exists)
+        run: |
+          if ! gcloud artifacts repositories describe ${AR_REPO} \
+            --location=${REGION} --project=${{ secrets.GCP_PROJECT }} &>/dev/null 2>&1; then
+            gcloud artifacts repositories create ${AR_REPO} \
+              --repository-format=docker \
+              --location=${REGION} \
+              --project=${{ secrets.GCP_PROJECT }}
+          fi
+
+      - name: Build and Push Docker Image
+        run: |
+          gcloud builds submit \
+            --project=${{ secrets.GCP_PROJECT }} \
+            --region=${REGION} \
+            --tag=${REGION}-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/${AR_REPO}/${SERVICE_NAME}:${{ github.sha }} \
+            --tag=${REGION}-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/${AR_REPO}/${SERVICE_NAME}:latest \
+            --machine-type=e2-medium \
+            --timeout=20m \
+            .
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${SERVICE_NAME} \
+            --project=${{ secrets.GCP_PROJECT }} \
+            --region=${REGION} \
+            --image=${REGION}-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/${AR_REPO}/${SERVICE_NAME}:${{ github.sha }} \
+            --platform=managed \
+            --port=8080 \
+            --cpu=1 \
+            --memory=512Mi \
+            --min-instances=1 \
+            --max-instances=5 \
+            --concurrency=80 \
+            --timeout=600 \
+            --allow-unauthenticated \
+            --set-env-vars="GCS_BUCKET=${{ secrets.GCS_BUCKET }},ROOT_DOMAIN=${{ secrets.ROOT_DOMAIN }},REGION=${REGION},GCP_PROJECT=${{ secrets.GCP_PROJECT }},AR_REPO=${AR_REPO},VPC_CONNECTOR=nexus-connector-v2,DNS_ZONE=my-domain-zone,GOOGLE_APPLICATION_CREDENTIALS=${SECRET_MOUNT_PATH}/gcs-service-account.json" \
+            --set-secrets="${SECRET_MOUNT_PATH}/gcs-service-account.json=${SECRET_NAME}:latest" \
+            --no-cpu-throttling
+
+      - name: Get Service URL
+        run: |
+          SERVICE_URL=$(gcloud run services describe ${SERVICE_NAME} \
+            --project=${{ secrets.GCP_PROJECT }} \
+            --region=${REGION} \
+            --format='value(status.url)')
+          echo "::notice::Cloud Run URL: ${SERVICE_URL}"
+          echo "::notice::Custom Domain: https://panel.${{ secrets.ROOT_DOMAIN }}"
+
+      - name: Bind Custom Domain (Optional)
+        continue-on-error: true
+        run: |
+          PANEL_DOMAIN="panel.${{ secrets.ROOT_DOMAIN }}"
+          if gcloud beta run domain-mappings describe \
+            --domain=${PANEL_DOMAIN} \
+            --region=${REGION} \
+            --project=${{ secrets.GCP_PROJECT }} &>/dev/null 2>&1; then
+            echo "域名已绑定: ${PANEL_DOMAIN}"
+          else
+            gcloud beta run domain-mappings create \
+              --service=${SERVICE_NAME} \
+              --domain=${PANEL_DOMAIN} \
+              --region=${REGION} \
+              --project=${{ secrets.GCP_PROJECT }} || echo "域名绑定可稍后手动完成"
+          fi

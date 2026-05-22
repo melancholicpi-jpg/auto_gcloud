@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auto GCloud - 部署管理面板</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <h1>Auto GCloud</h1>
+      <span class="header-sub">二级域名 + 镜像托管全闭环部署</span>
+    </div>
+  </header>
+
+  <main class="container">
+    <div class="steps">
+      <div class="step active" data-step="1">
+        <div class="step-number">1</div>
+        <div class="step-label">项目信息</div>
+      </div>
+      <div class="step-connector"></div>
+      <div class="step" data-step="2">
+        <div class="step-number">2</div>
+        <div class="step-label">上传镜像</div>
+      </div>
+      <div class="step-connector"></div>
+      <div class="step" data-step="3">
+        <div class="step-number">3</div>
+        <div class="step-label">环境变量</div>
+      </div>
+      <div class="step-connector"></div>
+      <div class="step" data-step="4">
+        <div class="step-number">4</div>
+        <div class="step-label">提交部署</div>
+      </div>
+    </div>
+
+    <form id="deployForm" class="deploy-form">
+      <div class="step-panel" id="step1">
+        <h2>项目基本信息</h2>
+        <div class="form-group">
+          <label for="projectId">项目 ID <span class="required">*</span></label>
+          <input type="text" id="projectId" name="projectId"
+            placeholder="my-project-001"
+            pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?"
+            minlength="3" maxlength="63" required>
+          <span class="hint">3-63位，小写字母、数字、短横线</span>
+        </div>
+        <div class="form-group">
+          <label for="subdomain">二级域名 <span class="required">*</span></label>
+          <div class="input-suffix">
+            <input type="text" id="subdomain" name="subdomain"
+              placeholder="admin"
+              pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?"
+              minlength="3" maxlength="20" required>
+            <span class="suffix" id="domainSuffix">.aihubflux.com</span>
+          </div>
+          <span class="hint">3-20位，小写字母、数字、短横线</span>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-primary" onclick="nextStep(2)">下一步</button>
+        </div>
+      </div>
+
+      <div class="step-panel hidden" id="step2">
+        <h2>上传项目镜像</h2>
+        <div class="upload-area" id="imageUpload">
+          <div class="upload-icon">📦</div>
+          <div class="upload-text">
+            <strong>项目镜像</strong>
+            <span>拖拽 .tar 文件到此处或点击选择（镜像需包含前后端）</span>
+          </div>
+          <input type="file" id="projectImage" accept=".tar" class="upload-input">
+          <div class="upload-status" id="imageStatus"></div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="prevStep(1)">上一步</button>
+          <button type="button" class="btn btn-primary" onclick="nextStep(3)">下一步</button>
+        </div>
+      </div>
+
+      <div class="step-panel hidden" id="step3">
+        <h2>环境变量配置</h2>
+        <div class="env-editor">
+          <div class="env-toolbar">
+            <button type="button" class="btn btn-sm" onclick="generateTemplate()">加载默认模板</button>
+            <button type="button" class="btn btn-sm" onclick="addEnvRow()">+ 添加变量</button>
+          </div>
+          <div id="envRows" class="env-rows"></div>
+        </div>
+        <div class="yaml-preview-toggle" onclick="toggleYamlPreview()">
+          查看 YAML 预览 ▾
+        </div>
+        <div class="yaml-preview hidden" id="yamlPreview">
+          <pre id="yamlContent"></pre>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="prevStep(2)">上一步</button>
+          <button type="button" class="btn btn-primary" onclick="nextStep(4)">下一步</button>
+        </div>
+      </div>
+
+      <div class="step-panel hidden" id="step4">
+        <h2>确认并提交</h2>
+        <div class="summary">
+          <div class="summary-row">
+            <span class="summary-label">项目 ID</span>
+            <span class="summary-value" id="summaryProjectId">-</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">访问域名</span>
+            <span class="summary-value" id="summaryDomain">-</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">项目镜像</span>
+            <span class="summary-value" id="summaryImage">-</span>
+          </div>
+          <div class="summary-row">
+            <span class="summary-label">环境变量数</span>
+            <span class="summary-value" id="summaryEnvCount">-</span>
+          </div>
+        </div>
+        <div class="upload-progress-wrap hidden" id="uploadProgressWrap">
+          <div class="upload-progress-label" id="uploadProgressLabel">准备上传...</div>
+          <div class="upload-progress-track">
+            <div class="upload-progress-fill" id="uploadProgressBar"></div>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="prevStep(3)">上一步</button>
+          <button type="submit" class="btn btn-submit" id="submitBtn">
+            🚀 提交部署
+          </button>
+        </div>
+      </div>
+    </form>
+
+    <div class="result-panel hidden" id="resultPanel">
+      <div class="result-icon" id="resultIcon">✅</div>
+      <h2 id="resultTitle">上传完成</h2>
+      <p id="resultMessage"></p>
+      <div class="result-domain" id="resultDomain"></div>
+    </div>
+  </main>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

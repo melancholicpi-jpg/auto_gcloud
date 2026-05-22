@@ -1,0 +1,11 @@
+{
+  "name": "auto-gcloud-function",
+  "version": "1.0.0",
+  "description": "Auto GCloud Cloud Function for automated deployment",
+  "main": "index.js",
+  "dependencies": {
+    "@google-cloud/storage": "^7.11.0",
+    "@google-cloud/functions-framework": "^3.4.2",
+    "yaml": "^2.6.0"
+  }
+}

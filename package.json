@@ -1,0 +1,23 @@
+{
+  "name": "auto-gcloud",
+  "version": "1.0.0",
+  "description": "二级域名 + 镜像托管全闭环自动化部署平台",
+  "private": true,
+  "scripts": {
+    "start": "node user-panel/server.js",
+    "dev": "node --watch user-panel/server.js",
+    "deploy:cloud": "bash deploy.sh",
+    "deploy:panel": "gcloud run deploy user-panel --source user-panel/ --region=asia-east1 --allow-unauthenticated",
+    "deploy:function": "bash cloud-function/deploy.sh",
+    "init:infra": "bash scripts/00-init-customer-bucket.sh"
+  },
+  "dependencies": {
+    "@google-cloud/storage": "^7.11.0",
+    "@google-cloud/functions-framework": "^3.4.2",
+    "express": "^4.21.0",
+    "multer": "^1.4.5-lts.1",
+    "yaml": "^2.6.0",
+    "cors": "^2.8.5",
+    "uuid": "^10.0.0"
+  }
+}
