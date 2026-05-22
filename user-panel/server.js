@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { Storage } = require('@google-cloud/storage');
+const { CloudBuildClient } = require('@google-cloud/cloudbuild');
 const YAML = require('yaml');
 const { v4: uuidv4 } = require('uuid');
 
@@ -35,14 +36,21 @@ function getSessionDir(sessionId) {
 }
 
 let storage = null;
+let cloudBuild = null;
 try {
   storage = new Storage({
     projectId: GCP_PROJECT,
     keyFilename: KEY_FILE
   });
   console.log('GCS 客户端已初始化');
+
+  cloudBuild = new CloudBuildClient({
+    projectId: GCP_PROJECT,
+    keyFilename: KEY_FILE
+  });
+  console.log('Cloud Build 客户端已初始化');
 } catch (err) {
-  console.error('GCS 客户端初始化失败:', err.message);
+  console.error('GCP 客户端初始化失败:', err.message);
 }
 
 function validateSubdomain(s) {
@@ -205,6 +213,63 @@ function assembleFile(chunkDir, tarPath, totalChunks) {
   });
 }
 
+async function submitCloudBuildDeploy(session, projectId, subdomain, imageName, envVars) {
+  session.status = 'deploying';
+  session.buildLogUrl = null;
+  const serviceName = projectId;
+  const imageUrl = `${REGISTRY}/${GCP_PROJECT}/${AR_REPO}/${imageName}:latest`;
+  const envString = Object.entries(envVars || {}).map(([k, v]) => `${k}=${v}`).join(',');
+
+  const build = {
+    steps: [
+      {
+        name: 'gcr.io/cloud-builders/gsutil',
+        args: ['cp', `gs://${GCS_BUCKET}/projects/${projectId}/${imageName}.tar`, '/workspace/image.tar']
+      },
+      {
+        name: 'gcr.io/google.com/cloudsdktool/cloud-sdk',
+        entrypoint: 'bash',
+        args: [
+          '-c',
+          [
+            'set -e',
+            `gcloud auth configure-docker ${REGION} --quiet`,
+            'docker load -i /workspace/image.tar',
+            `LOADED_TAG=$(docker images --format "{{.Repository}}:{{.Tag}}" | head -1)`,
+            `docker tag $LOADED_TAG ${imageUrl}`,
+            `docker push ${imageUrl}`,
+            `gcloud run deploy ${serviceName} --image=${imageUrl} --platform=managed --region=${REGION} --port=3000 --cpu=2 --memory=4Gi --min-instances=1 --max-instances=10 --allow-unauthenticated --concurrency=80 --timeout=600 --no-cpu-throttling --quiet` + (envString ? ` --set-env-vars="${envString}"` : ''),
+            `gcloud run domain-mappings create --service=${serviceName} --domain=${subdomain}.${ROOT_DOMAIN} --region=${REGION} --quiet 2>/dev/null || echo "域名可能已绑定，跳过"`,
+            `SERVICE_URL=$(gcloud run services describe ${serviceName} --region=${REGION} --format="value(status.url)")`,
+            `echo "DEPLOY_DONE: ${serviceName} => $SERVICE_URL => https://${subdomain}.${ROOT_DOMAIN}"`
+          ].join('\n')
+        ]
+      }
+    ],
+    timeout: '1800s',
+    logsBucket: `gs://${GCS_BUCKET}/logs`
+  };
+
+  try {
+    console.log(`[${projectId}] 提交 Cloud Build 部署任务...`);
+    const [operation] = await cloudBuild.createBuild({
+      projectId: GCP_PROJECT,
+      build: build
+    });
+    const buildId = operation.metadata.build.id;
+    session.buildId = buildId;
+    session.buildLogUrl = `https://console.cloud.google.com/cloud-build/builds/${buildId}?project=${GCP_PROJECT}`;
+    console.log(`[${projectId}] Cloud Build 已提交: ${buildId}`);
+    console.log(`[${projectId}] 日志: ${session.buildLogUrl}`);
+    return { buildId, logUrl: session.buildLogUrl };
+  } catch (err) {
+    console.error(`[${projectId}] Cloud Build 提交失败:`, err.message);
+    session.status = 'error';
+    session.error = 'Cloud Build 部署失败: ' + err.message;
+    return null;
+  }
+}
+
 async function processDeploy(sessionId, session, projectId, subdomain, envVars) {
   session.status = 'assembling';
   const chunkDir = getSessionDir(sessionId);
@@ -240,10 +305,10 @@ async function processDeploy(sessionId, session, projectId, subdomain, envVars) 
       console.log(`[${projectId}] 镜像上传 GCS 成功`);
 
       await bucket.file(`${prefix}/user-config.yaml`).save(yamlContent, { contentType: 'application/x-yaml' });
+      session.status = 'uploaded';
       console.log(`[${projectId}] YAML 上传 GCS 成功`);
 
-      session.status = 'done';
-      console.log(`[${projectId}] 部署完成: https://${subdomain}.${ROOT_DOMAIN}`);
+      await submitCloudBuildDeploy(session, projectId, subdomain, imageName, envVars);
     } catch (err) {
       console.error(`[${projectId}] GCS上传失败:`, err.message);
       session.status = 'error';
@@ -314,6 +379,8 @@ app.get('/api/deploy-status/:sessionId', (req, res) => {
     expectedDomain: session.subdomain ? `https://${session.subdomain}.${ROOT_DOMAIN}` : null
   };
   if (session.error) result.error = session.error;
+  if (session.buildId) result.buildId = session.buildId;
+  if (session.buildLogUrl) result.buildLogUrl = session.buildLogUrl;
   res.json(result);
 });
 

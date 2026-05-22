@@ -299,6 +299,8 @@ function pollDeployStatus(sessionId, expectedDomain, callback) {
       var statusText = {
         'assembling': '正在组装文件...',
         'uploading': '正在上传至 GCS...',
+        'uploaded': '正在提交 Cloud Build 部署...',
+        'deploying': 'Cloud Build 构建中...',
         'processing': '正在处理...'
       };
       showUploadProgress(true, statusText[status.status] || '处理中...');

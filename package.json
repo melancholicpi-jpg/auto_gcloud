@@ -12,11 +12,12 @@
     "init:infra": "bash scripts/00-init-customer-bucket.sh"
   },
   "dependencies": {
-    "@google-cloud/storage": "^7.11.0",
+    "@google-cloud/cloudbuild": "^4.8.1",
     "@google-cloud/functions-framework": "^3.4.2",
-    "express": "^4.21.0",
-    "yaml": "^2.6.0",
+    "@google-cloud/storage": "^7.11.0",
     "cors": "^2.8.5",
-    "uuid": "^10.0.0"
+    "express": "^4.21.0",
+    "uuid": "^10.0.0",
+    "yaml": "^2.6.0"
   }
 }
