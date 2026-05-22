@@ -75,14 +75,15 @@ jobs:
             --tag=${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ env.SERVICE_NAME }}:latest \
             --machine-type=e2-medium \
             --timeout=20m \
-            . || true
+            --suppress-logs \
+            .
 
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --project=${{ env.GCP_PROJECT }} \
             --region=${{ env.REGION }} \
-            --image=${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ env.SERVICE_NAME }}:${{ github.sha }} \
+            --image=${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ env.SERVICE_NAME }}:latest \
             --platform=managed \
             --port=8080 \
             --cpu=1 \
