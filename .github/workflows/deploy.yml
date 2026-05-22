@@ -114,13 +114,13 @@ jobs:
         continue-on-error: true
         run: |
           PANEL_DOMAIN="panel.${{ env.ROOT_DOMAIN }}"
-          if gcloud beta run domain-mappings describe \
+          if gcloud run domain-mappings describe \
             --domain=${PANEL_DOMAIN} \
             --region=${{ env.REGION }} \
             --project=${{ env.GCP_PROJECT }} &>/dev/null 2>&1; then
             echo "域名已绑定: ${PANEL_DOMAIN}"
           else
-            gcloud beta run domain-mappings create \
+            gcloud run domain-mappings create \
               --service=${{ env.SERVICE_NAME }} \
               --domain=${PANEL_DOMAIN} \
               --region=${{ env.REGION }} \
