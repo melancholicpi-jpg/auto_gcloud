@@ -250,7 +250,92 @@ function completeUpload(sessionId, callback) {
     projectId: pid,
     subdomain: sub,
     envVars: envObj
-  }, callback);
+  }, function(err, result) {
+    if (err) return callback(err);
+    if (result.processing) {
+      pollDeployStatus(sessionId, result.expectedDomain, function(pollErr, finalResult) {
+        callback(pollErr, finalResult || result);
+      });
+    } else {
+      callback(null, result);
+    }
+  });
+}
+
+function pollDeployStatus(sessionId, expectedDomain, callback) {
+  showUploadProgress(true, '正在后台组装文件...');
+  var attempts = 0;
+  var maxAttempts = 120;
+
+  function poll() {
+    getJSON('/api/deploy-status/' + sessionId, function(err, status) {
+      if (err) {
+        attempts++;
+        if (attempts >= maxAttempts) {
+          return callback('查询状态超时');
+        }
+        setTimeout(poll, 2000);
+        return;
+      }
+
+      if (status.status === 'done') {
+        showUploadProgressBar(false);
+        callback(null, {
+          success: true,
+          projectId: status.projectId,
+          subdomain: status.subdomain,
+          expectedDomain: status.expectedDomain || expectedDomain,
+          message: '镜像已上传至 GCS，等待自动部署'
+        });
+        return;
+      }
+
+      if (status.status === 'error') {
+        showUploadProgressBar(false);
+        callback(status.error || '后台处理出错');
+        return;
+      }
+
+      var statusText = {
+        'assembling': '正在组装文件...',
+        'uploading': '正在上传至 GCS...',
+        'processing': '正在处理...'
+      };
+      showUploadProgress(true, statusText[status.status] || '处理中...');
+      attempts++;
+      if (attempts >= maxAttempts) {
+        return callback('处理超时');
+      }
+      setTimeout(poll, 2000);
+    });
+  }
+
+  poll();
+}
+
+function showUploadProgress(show, text) {
+  var wrap = document.getElementById('uploadProgressWrap');
+  var label = document.getElementById('uploadProgressLabel');
+  if (wrap) wrap.classList.toggle('hidden', !show);
+  if (label && text) label.textContent = text;
+}
+
+function getJSON(url, callback) {
+  var xhr = new XMLHttpRequest();
+  xhr.addEventListener('load', function() {
+    if (xhr.status >= 200 && xhr.status < 300) {
+      callback(null, JSON.parse(xhr.responseText));
+    } else {
+      var msg = '服务器错误 (' + xhr.status + ')';
+      try { msg = JSON.parse(xhr.responseText).error || msg; } catch (_) {}
+      callback(msg);
+    }
+  });
+  xhr.addEventListener('error', function() {
+    callback('网络错误');
+  });
+  xhr.open('GET', url);
+  xhr.send();
 }
 
 function postJSON(url, data, callback) {

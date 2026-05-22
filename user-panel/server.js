@@ -175,7 +175,89 @@ app.put('/api/upload-chunk/:sessionId',
   }
 );
 
-app.post('/api/complete-upload/:sessionId', async (req, res) => {
+function assembleFile(chunkDir, tarPath, totalChunks) {
+  return new Promise((resolve, reject) => {
+    const writeStream = fs.createWriteStream(tarPath);
+    writeStream.on('finish', () => {
+      const size = fs.statSync(tarPath).size;
+      resolve(size);
+    });
+    writeStream.on('error', reject);
+
+    let i = 0;
+    function writeNext() {
+      if (i >= totalChunks) {
+        writeStream.end();
+        return;
+      }
+      try {
+        const chunkPath = path.join(chunkDir, 'chunk-' + i);
+        const data = fs.readFileSync(chunkPath);
+        writeStream.write(data);
+        i++;
+        setImmediate(writeNext);
+      } catch (err) {
+        writeStream.destroy();
+        reject(err);
+      }
+    }
+    writeNext();
+  });
+}
+
+async function processDeploy(sessionId, session, projectId, subdomain, envVars) {
+  session.status = 'assembling';
+  const chunkDir = getSessionDir(sessionId);
+  const dir = getProjectDir(projectId);
+  const tarPath = path.join(dir, session.fileName);
+
+  try {
+    console.log(`[${sessionId}] 开始组装文件: ${session.fileName}`);
+    const tarSize = await assembleFile(chunkDir, tarPath, session.totalChunks);
+    console.log(`[${sessionId}] 文件组装完成: ${(tarSize / 1024 / 1024).toFixed(1)}MB`);
+  } catch (err) {
+    console.error(`[${sessionId}] 文件组装失败:`, err.message);
+    session.status = 'error';
+    session.error = '文件组装失败: ' + err.message;
+    return;
+  }
+
+  const imageName = session.fileName.replace('.tar', '');
+  const yamlContent = buildConfigYaml({ projectId, subdomain, imageName, tag: 'latest', envVars: envVars || {} });
+  const yamlPath = path.join(dir, 'user-config.yaml');
+  fs.writeFileSync(yamlPath, yamlContent);
+
+  if (storage) {
+    session.status = 'uploading';
+    try {
+      const bucket = storage.bucket(GCS_BUCKET);
+      const prefix = `projects/${projectId}`;
+      console.log(`[${projectId}] 上传镜像到 GCS: gs://${GCS_BUCKET}/${prefix}/${session.fileName}`);
+      await bucket.upload(tarPath, {
+        destination: `${prefix}/${session.fileName}`,
+        resumable: true
+      });
+      console.log(`[${projectId}] 镜像上传 GCS 成功`);
+
+      await bucket.file(`${prefix}/user-config.yaml`).save(yamlContent, { contentType: 'application/x-yaml' });
+      console.log(`[${projectId}] YAML 上传 GCS 成功`);
+
+      session.status = 'done';
+      console.log(`[${projectId}] 部署完成: https://${subdomain}.${ROOT_DOMAIN}`);
+    } catch (err) {
+      console.error(`[${projectId}] GCS上传失败:`, err.message);
+      session.status = 'error';
+      session.error = 'GCS上传失败: ' + err.message;
+      return;
+    }
+  } else {
+    session.status = 'done';
+  }
+
+  try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch (_) {}
+}
+
+app.post('/api/complete-upload/:sessionId', (req, res) => {
   const { sessionId } = req.params;
   const { projectId, subdomain, envVars } = req.body;
 
@@ -197,72 +279,42 @@ app.post('/api/complete-upload/:sessionId', async (req, res) => {
     });
   }
 
-  console.log(`[${sessionId}] 开始组装文件: ${session.fileName}`);
-  const chunkDir = getSessionDir(sessionId);
-  const dir = getProjectDir(projectId);
-  const tarPath = path.join(dir, session.fileName);
-
-  try {
-    const writeStream = fs.createWriteStream(tarPath);
-    for (let i = 0; i < session.totalChunks; i++) {
-      const chunkPath = path.join(chunkDir, 'chunk-' + i);
-      writeStream.write(fs.readFileSync(chunkPath));
-    }
-    writeStream.end();
-    console.log(`[${sessionId}] 文件组装完成: ${tarPath} (${(fs.statSync(tarPath).size / 1024 / 1024).toFixed(1)}MB)`);
-  } catch (err) {
-    console.error(`[${sessionId}] 文件组装失败:`, err.message);
-    return res.status(500).json({ error: '文件组装失败: ' + err.message });
+  if (session.status === 'assembling' || session.status === 'uploading') {
+    return res.json({ success: true, processing: true, message: '已在处理中' });
   }
 
-  const imageName = session.fileName.replace('.tar', '');
-  const yamlContent = buildConfigYaml({
-    projectId, subdomain,
-    imageName,
-    tag: 'latest',
-    envVars: envVars || {}
-  });
+  session.status = 'processing';
+  session.projectId = projectId;
+  session.subdomain = subdomain;
+  console.log(`[${sessionId}] 已接收，后台处理中...`);
 
-  const yamlPath = path.join(dir, 'user-config.yaml');
-  fs.writeFileSync(yamlPath, yamlContent);
-
-  if (storage) {
-    try {
-      const bucket = storage.bucket(GCS_BUCKET);
-      const prefix = `projects/${projectId}`;
-      console.log(`[${projectId}] 上传镜像到 GCS: gs://${GCS_BUCKET}/${prefix}/${session.fileName}`);
-      await bucket.upload(tarPath, {
-        destination: `${prefix}/${session.fileName}`,
-        resumable: true
-      });
-      console.log(`[${projectId}] 镜像上传 GCS 成功`);
-
-      await bucket.file(`${prefix}/user-config.yaml`).save(yamlContent, {
-        contentType: 'application/x-yaml'
-      });
-      console.log(`[${projectId}] YAML 上传 GCS 成功`);
-    } catch (err) {
-      console.error(`[${projectId}] GCS上传失败:`, err.message);
-    }
-  }
-
-  try {
-    fs.rmSync(chunkDir, { recursive: true, force: true });
-  } catch (_) {}
-
-  sessions.delete(sessionId);
-
-  console.log(`[${projectId}] 部署完成: https://${subdomain}.${ROOT_DOMAIN}`);
+  processDeploy(sessionId, session, projectId, subdomain, envVars);
 
   res.json({
     success: true,
+    processing: true,
     projectId,
     subdomain,
     expectedDomain: `https://${subdomain}.${ROOT_DOMAIN}`,
-    message: storage
-      ? '镜像已上传至 GCS，等待自动部署'
-      : '文件已保存到服务器'
+    message: '分片已完整接收，正在后台组装并上传 GCS，请稍候查看状态'
   });
+});
+
+app.get('/api/deploy-status/:sessionId', (req, res) => {
+  const session = sessions.get(req.params.sessionId);
+  if (!session) {
+    return res.json({ status: 'gone', message: '部署已完成或会话已过期' });
+  }
+  const result = {
+    status: session.status || 'received',
+    totalChunks: session.totalChunks,
+    receivedChunks: session.receivedChunks ? session.receivedChunks.size : 0,
+    projectId: session.projectId,
+    subdomain: session.subdomain,
+    expectedDomain: session.subdomain ? `https://${session.subdomain}.${ROOT_DOMAIN}` : null
+  };
+  if (session.error) result.error = session.error;
+  res.json(result);
 });
 
 app.get('/api/upload-status/:projectId', async (req, res) => {
