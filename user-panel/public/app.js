@@ -216,11 +216,6 @@ function initUpload(fileName, totalSize, callback) {
 }
 
 function uploadChunk(sessionId, chunkIndex, totalChunks, blob, callback) {
-  var formData = new FormData();
-  formData.append('chunk', blob, 'chunk');
-  formData.append('chunkIndex', chunkIndex);
-  formData.append('totalChunks', totalChunks);
-
   var xhr = new XMLHttpRequest();
 
   xhr.addEventListener('load', function() {
@@ -237,8 +232,9 @@ function uploadChunk(sessionId, chunkIndex, totalChunks, blob, callback) {
     callback('网络错误');
   });
 
-  xhr.open('POST', '/api/upload-chunk/' + sessionId);
-  xhr.send(formData);
+  xhr.open('PUT', '/api/upload-chunk/' + sessionId + '?chunkIndex=' + chunkIndex + '&totalChunks=' + totalChunks);
+  xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+  xhr.send(blob);
 }
 
 function completeUpload(sessionId, callback) {

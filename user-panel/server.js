@@ -1,5 +1,4 @@
 const express = require('express');
-const multer = require('multer');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
@@ -41,7 +40,7 @@ try {
     projectId: GCP_PROJECT,
     keyFilename: KEY_FILE
   });
-  console.log(`GCS 客户端已初始化: ${KEY_FILE}`);
+  console.log('GCS 客户端已初始化');
 } catch (err) {
   console.error('GCS 客户端初始化失败:', err.message);
 }
@@ -93,17 +92,6 @@ app.use((req, _res, next) => {
   next();
 });
 
-const chunkStorage = multer.diskStorage({
-  destination: (req, _file, cb) => {
-    const sessionId = req.params.sessionId;
-    cb(null, getSessionDir(sessionId));
-  },
-  filename: (req, file, cb) => {
-    cb(null, 'chunk-' + req.body.chunkIndex);
-  }
-});
-const chunkUpload = multer({ storage: chunkStorage, limits: { fileSize: CHUNK_SIZE } });
-
 app.get('/api/config', (_req, res) => {
   res.json({
     region: REGION, project: GCP_PROJECT, bucket: GCS_BUCKET,
@@ -146,34 +134,46 @@ app.post('/api/init-upload', (req, res) => {
   res.json({ sessionId, totalChunks, chunkSize: CHUNK_SIZE });
 });
 
-app.post('/api/upload-chunk/:sessionId', chunkUpload.single('chunk'), (req, res) => {
-  const { sessionId } = req.params;
-  const { chunkIndex, totalChunks } = req.body;
+app.put('/api/upload-chunk/:sessionId',
+  express.raw({ limit: CHUNK_SIZE + 1024 * 1024, type: 'application/octet-stream' }),
+  (req, res) => {
+    const { sessionId } = req.params;
+    const chunkIndex = parseInt(req.query.chunkIndex, 10);
 
-  const session = sessions.get(sessionId);
-  if (!session) {
-    return res.status(404).json({ error: '会话不存在或已过期' });
+    const session = sessions.get(sessionId);
+    if (!session) {
+      return res.status(404).json({ error: '会话不存在或已过期' });
+    }
+
+    if (isNaN(chunkIndex) || chunkIndex < 0 || chunkIndex >= session.totalChunks) {
+      return res.status(400).json({ error: '分片索引无效' });
+    }
+
+    if (!req.body || req.body.length === 0) {
+      return res.status(400).json({ error: '分片数据为空' });
+    }
+
+    try {
+      const chunkDir = getSessionDir(sessionId);
+      const chunkPath = path.join(chunkDir, 'chunk-' + chunkIndex);
+      fs.writeFileSync(chunkPath, req.body);
+      console.log(`[${sessionId}] 分片 ${chunkIndex + 1}/${session.totalChunks} 已保存 (${(req.body.length / 1024).toFixed(1)}KB)`);
+    } catch (err) {
+      console.error(`[${sessionId}] 写入分片失败:`, err.message);
+      return res.status(500).json({ error: '写入分片失败: ' + err.message });
+    }
+
+    session.receivedChunks.add(chunkIndex);
+    session.lastActivity = Date.now();
+
+    res.json({
+      success: true,
+      chunkIndex: chunkIndex,
+      received: session.receivedChunks.size,
+      total: session.totalChunks
+    });
   }
-
-  const chunkIdx = parseInt(chunkIndex, 10);
-  if (isNaN(chunkIdx) || chunkIdx < 0 || chunkIdx >= session.totalChunks) {
-    return res.status(400).json({ error: '分片索引无效' });
-  }
-  if (!req.file) {
-    return res.status(400).json({ error: '缺少分片文件' });
-  }
-
-  session.receivedChunks.add(chunkIdx);
-  session.lastActivity = Date.now();
-  console.log(`[${sessionId}] 分片 ${chunkIdx + 1}/${session.totalChunks} 已接收`);
-
-  res.json({
-    success: true,
-    chunkIndex: chunkIdx,
-    received: session.receivedChunks.size,
-    total: session.totalChunks
-  });
-});
+);
 
 app.post('/api/complete-upload/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
@@ -206,8 +206,7 @@ app.post('/api/complete-upload/:sessionId', async (req, res) => {
     const writeStream = fs.createWriteStream(tarPath);
     for (let i = 0; i < session.totalChunks; i++) {
       const chunkPath = path.join(chunkDir, 'chunk-' + i);
-      const chunkData = fs.readFileSync(chunkPath);
-      writeStream.write(chunkData);
+      writeStream.write(fs.readFileSync(chunkPath));
     }
     writeStream.end();
     console.log(`[${sessionId}] 文件组装完成: ${tarPath} (${(fs.statSync(tarPath).size / 1024 / 1024).toFixed(1)}MB)`);
@@ -227,7 +226,6 @@ app.post('/api/complete-upload/:sessionId', async (req, res) => {
   const yamlPath = path.join(dir, 'user-config.yaml');
   fs.writeFileSync(yamlPath, yamlContent);
 
-  let gcsError = null;
   if (storage) {
     try {
       const bucket = storage.bucket(GCS_BUCKET);
@@ -245,10 +243,7 @@ app.post('/api/complete-upload/:sessionId', async (req, res) => {
       console.log(`[${projectId}] YAML 上传 GCS 成功`);
     } catch (err) {
       console.error(`[${projectId}] GCS上传失败:`, err.message);
-      gcsError = err.message;
     }
-  } else {
-    gcsError = 'GCS客户端未初始化';
   }
 
   try {
@@ -257,7 +252,7 @@ app.post('/api/complete-upload/:sessionId', async (req, res) => {
 
   sessions.delete(sessionId);
 
-  console.log(`[${projectId}] ✅ 部署完成: https://${subdomain}.${ROOT_DOMAIN}`);
+  console.log(`[${projectId}] 部署完成: https://${subdomain}.${ROOT_DOMAIN}`);
 
   res.json({
     success: true,
@@ -266,7 +261,7 @@ app.post('/api/complete-upload/:sessionId', async (req, res) => {
     expectedDomain: `https://${subdomain}.${ROOT_DOMAIN}`,
     message: storage
       ? '镜像已上传至 GCS，等待自动部署'
-      : '文件已保存到服务器（GCS未连接，稍后自动重试）'
+      : '文件已保存到服务器'
   });
 });
 
