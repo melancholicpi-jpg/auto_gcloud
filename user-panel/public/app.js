@@ -1,12 +1,13 @@
-let currentStep = 1;
-let projectFile = null;
-let envVars = [
+var currentStep = 1;
+var projectFile = null;
+var envVars = [
   { key: 'NODE_ENV', value: 'production' },
   { key: 'API_URL', value: '' },
   { key: 'CORS_ORIGIN', value: '' }
 ];
 
 var ROOT_DOMAIN = 'aihubflux.com';
+var CHUNK_SIZE = 5 * 1024 * 1024;
 
 function setStep(step) {
   document.querySelectorAll('.step').forEach(function(el, i) {
@@ -32,13 +33,13 @@ function prevStep(step) {
 
 function validateStep(step) {
   if (step === 1) {
-    var projectId = document.getElementById('projectId').value.trim();
-    var subdomain = document.getElementById('subdomain').value.trim();
-    if (!projectId || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(projectId) || projectId.length < 3) {
+    var pid = document.getElementById('projectId').value.trim();
+    var sub = document.getElementById('subdomain').value.trim();
+    if (!pid || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(pid) || pid.length < 3) {
       showToast('项目 ID 格式无效', 'error');
       return false;
     }
-    if (!subdomain || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(subdomain) || subdomain.length < 3 || subdomain.length > 20) {
+    if (!sub || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(sub) || sub.length < 3 || sub.length > 20) {
       showToast('二级域名格式无效', 'error');
       return false;
     }
@@ -56,20 +57,20 @@ function validateStep(step) {
 }
 
 function updateSummary() {
-  var projectId = document.getElementById('projectId').value.trim();
-  var subdomain = document.getElementById('subdomain').value.trim();
-  document.getElementById('summaryProjectId').textContent = projectId || '-';
-  document.getElementById('summaryDomain').textContent = 'https://' + (subdomain || '???') + '.' + ROOT_DOMAIN;
+  var pid = document.getElementById('projectId').value.trim();
+  var sub = document.getElementById('subdomain').value.trim();
+  document.getElementById('summaryProjectId').textContent = pid || '-';
+  document.getElementById('summaryDomain').textContent = 'https://' + (sub || '???') + '.' + ROOT_DOMAIN;
   document.getElementById('summaryImage').textContent = projectFile ? projectFile.name : '-';
   document.getElementById('summaryEnvCount').textContent = envVars.filter(function(e) { return e.key; }).length + ' 个';
 }
 
 function generateTemplate() {
-  var subdomain = document.getElementById('subdomain').value.trim() || 'your-subdomain';
+  var sub = document.getElementById('subdomain').value.trim() || 'your-subdomain';
   envVars = [
     { key: 'NODE_ENV', value: 'production' },
-    { key: 'API_URL', value: 'https://' + subdomain + '.' + ROOT_DOMAIN },
-    { key: 'CORS_ORIGIN', value: 'https://' + subdomain + '.' + ROOT_DOMAIN }
+    { key: 'API_URL', value: 'https://' + sub + '.' + ROOT_DOMAIN },
+    { key: 'CORS_ORIGIN', value: 'https://' + sub + '.' + ROOT_DOMAIN }
   ];
   renderEnvRows();
   showToast('已加载默认环境变量模板', 'info');
@@ -85,8 +86,8 @@ function removeEnvRow(index) {
   renderEnvRows();
 }
 
-function updateEnvVar(index, field, newValue) {
-  envVars[index][field] = newValue;
+function updateEnvVar(index, field, val) {
+  envVars[index][field] = val;
   updateYamlPreview();
 }
 
@@ -115,12 +116,12 @@ function toggleYamlPreview() {
 }
 
 function updateYamlPreview() {
-  var projectId = document.getElementById('projectId').value.trim() || 'my-project-001';
-  var subdomain = document.getElementById('subdomain').value.trim() || 'admin';
+  var pid = document.getElementById('projectId').value.trim() || 'my-project-001';
+  var sub = document.getElementById('subdomain').value.trim() || 'admin';
   var yaml = [];
   yaml.push('user:');
-  yaml.push('  project_id: "' + projectId + '"');
-  yaml.push('  subdomain: "' + subdomain + '"');
+  yaml.push('  project_id: "' + pid + '"');
+  yaml.push('  subdomain: "' + sub + '"');
   yaml.push('');
   yaml.push('image:');
   yaml.push('  name: "' + (projectFile ? projectFile.name.replace('.tar', '') : 'project-app') + '"');
@@ -143,96 +144,117 @@ function updateYamlPreview() {
 function submitDeploy() {
   var submitBtn = document.getElementById('submitBtn');
   submitBtn.disabled = true;
-  submitBtn.textContent = '\u23f3 准备中...';
-
-  var projectId = document.getElementById('projectId').value.trim();
-  var subdomain = document.getElementById('subdomain').value.trim();
+  submitBtn.textContent = '\u23f3 初始化...';
 
   showUploadProgressBar(true);
-  updateUploadProgress(0, '0 KB / ' + formatSize(projectFile.size));
+  updateUploadProgress(0, '准备分片上传...');
 
-  initUpload(projectId, function(err, uploadInfo) {
+  var totalChunks = Math.ceil(projectFile.size / CHUNK_SIZE);
+
+  initUpload(projectFile.name, projectFile.size, function(err, sessionId) {
     if (err) {
-      showToast('获取上传地址失败: ' + err, 'error');
+      showToast('初始化上传失败: ' + err, 'error');
       resetSubmitBtn(submitBtn);
       return;
     }
 
-    submitBtn.textContent = '\u23f3 上传至 GCS...';
-    uploadToGCS(uploadInfo.uploadUrl, projectFile, function(uploadErr) {
-      if (uploadErr) {
-        showToast('上传镜像失败: ' + uploadErr, 'error');
-        resetSubmitBtn(submitBtn);
+    var uploadedChunks = 0;
+    var currentChunk = 0;
+
+    function uploadNextChunk() {
+      if (currentChunk >= totalChunks) {
+        submitBtn.textContent = '\u23f3 组装并部署...';
+        updateUploadProgress(100, formatSize(projectFile.size) + ' / ' + formatSize(projectFile.size));
+
+        var envObj = {};
+        envVars.filter(function(e) { return e.key; }).forEach(function(e) {
+          envObj[e.key] = e.value;
+        });
+
+        completeUpload(sessionId, function(completeErr, result) {
+          if (completeErr) {
+            showToast('部署失败: ' + completeErr, 'error');
+            resetSubmitBtn(submitBtn);
+            return;
+          }
+          setTimeout(function() { showResult(result); }, 400);
+        });
         return;
       }
 
-      updateUploadProgress(100, formatSize(projectFile.size) + ' / ' + formatSize(projectFile.size));
+      var start = currentChunk * CHUNK_SIZE;
+      var end = Math.min(start + CHUNK_SIZE, projectFile.size);
+      var blob = projectFile.slice(start, end);
 
-      submitBtn.textContent = '\u23f3 提交部署...';
-      var envObj = {};
-      envVars.filter(function(e) { return e.key; }).forEach(function(e) {
-        envObj[e.key] = e.value;
-      });
+      submitBtn.textContent = '\u23f3 上传分片 ' + (currentChunk + 1) + '/' + totalChunks;
 
-      postJSON('/api/submit', {
-        projectId: projectId,
-        subdomain: subdomain,
-        gcsPath: uploadInfo.gcsPath,
-        envVars: envObj
-      }, function(submitErr, result) {
-        if (submitErr) {
-          showToast('提交失败: ' + submitErr, 'error');
+      uploadChunk(sessionId, currentChunk, totalChunks, blob, function(chunkErr) {
+        if (chunkErr) {
+          showToast('分片 ' + (currentChunk + 1) + ' 上传失败: ' + chunkErr, 'error');
           resetSubmitBtn(submitBtn);
           return;
         }
-        setTimeout(function() { showResult(result); }, 400);
+        uploadedChunks++;
+        currentChunk++;
+        var pct = Math.round((uploadedChunks / totalChunks) * 100);
+        var uploadedBytes = uploadedChunks * CHUNK_SIZE;
+        if (uploadedBytes > projectFile.size) uploadedBytes = projectFile.size;
+        updateUploadProgress(pct, formatSize(uploadedBytes) + ' / ' + formatSize(projectFile.size));
+        uploadNextChunk();
       });
-    });
-  });
-}
-
-function initUpload(projectId, callback) {
-  postJSON('/api/init-upload', {
-    projectId: projectId,
-    fileName: projectFile.name
-  }, callback);
-}
-
-function uploadToGCS(uploadUrl, file, callback) {
-  var xhr = new XMLHttpRequest();
-
-  xhr.upload.addEventListener('progress', function(e) {
-    if (e.lengthComputable) {
-      var pct = Math.round((e.loaded / e.total) * 100);
-      updateUploadProgress(pct, formatSize(e.loaded) + ' / ' + formatSize(e.total));
     }
+
+    uploadNextChunk();
   });
+}
+
+function initUpload(fileName, totalSize, callback) {
+  postJSON('/api/init-upload', { fileName: fileName, totalSize: totalSize }, function(err, data) {
+    if (err) return callback(err);
+    callback(null, data.sessionId);
+  });
+}
+
+function uploadChunk(sessionId, chunkIndex, totalChunks, blob, callback) {
+  var formData = new FormData();
+  formData.append('chunk', blob, 'chunk');
+  formData.append('chunkIndex', chunkIndex);
+  formData.append('totalChunks', totalChunks);
+
+  var xhr = new XMLHttpRequest();
 
   xhr.addEventListener('load', function() {
     if (xhr.status >= 200 && xhr.status < 300) {
       callback(null);
     } else {
-      var msg = 'GCS 上传失败 (HTTP ' + xhr.status + ')';
-      try {
-        var r = JSON.parse(xhr.responseText);
-        msg = r.error || msg;
-      } catch(_) {}
+      var msg = '上传失败 (HTTP ' + xhr.status + ')';
+      try { msg = JSON.parse(xhr.responseText).error || msg; } catch (_) {}
       callback(msg);
     }
   });
 
   xhr.addEventListener('error', function() {
-    callback('网络错误，无法连接到 GCS');
+    callback('网络错误');
   });
 
-  xhr.addEventListener('timeout', function() {
-    callback('上传超时');
+  xhr.open('POST', '/api/upload-chunk/' + sessionId);
+  xhr.send(formData);
+}
+
+function completeUpload(sessionId, callback) {
+  var pid = document.getElementById('projectId').value.trim();
+  var sub = document.getElementById('subdomain').value.trim();
+
+  var envObj = {};
+  envVars.filter(function(e) { return e.key; }).forEach(function(e) {
+    envObj[e.key] = e.value;
   });
 
-  xhr.open('PUT', uploadUrl);
-  xhr.setRequestHeader('Content-Type', 'application/x-tar');
-  xhr.timeout = 1800000;
-  xhr.send(file);
+  postJSON('/api/complete-upload/' + sessionId, {
+    projectId: pid,
+    subdomain: sub,
+    envVars: envObj
+  }, callback);
 }
 
 function postJSON(url, data, callback) {
@@ -242,10 +264,7 @@ function postJSON(url, data, callback) {
       callback(null, JSON.parse(xhr.responseText));
     } else {
       var msg = '服务器错误 (' + xhr.status + ')';
-      try {
-        var r = JSON.parse(xhr.responseText);
-        msg = r.error || msg;
-      } catch(_) {}
+      try { msg = JSON.parse(xhr.responseText).error || msg; } catch (_) {}
       callback(msg);
     }
   });
@@ -289,7 +308,7 @@ function showResult(result) {
   document.getElementById('resultDomain').innerHTML =
     '<a href="' + result.expectedDomain + '" target="_blank">' + result.expectedDomain + '</a>';
 
-  showToast('文件已上传至 GCS，等待自动部署', 'success');
+  showToast('文件已上传至服务器并同步 GCS，等待部署', 'success');
 }
 
 function showToast(message, type) {
