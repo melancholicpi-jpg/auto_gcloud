@@ -75,6 +75,7 @@ jobs:
             --tag=${{ env.REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ env.SERVICE_NAME }}:latest \
             --machine-type=e2-medium \
             --timeout=20m \
+            --gcs-log-dir=gs://image.aihubflux.com/logs \
             --suppress-logs \
             .
 
