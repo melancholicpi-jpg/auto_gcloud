@@ -115,14 +115,10 @@ jobs:
         run: |
           PANEL_DOMAIN="panel.${{ env.ROOT_DOMAIN }}"
           if gcloud run domain-mappings describe \
-            --domain=${PANEL_DOMAIN} \
-            --region=${{ env.REGION }} \
-            --project=${{ env.GCP_PROJECT }} &>/dev/null 2>&1; then
+            --domain="${PANEL_DOMAIN}" &>/dev/null 2>&1; then
             echo "域名已绑定: ${PANEL_DOMAIN}"
           else
             gcloud run domain-mappings create \
               --service=${{ env.SERVICE_NAME }} \
-              --domain=${PANEL_DOMAIN} \
-              --region=${{ env.REGION }} \
-              --project=${{ env.GCP_PROJECT }} || echo "域名绑定可稍后手动完成"
+              --domain="${PANEL_DOMAIN}" || echo "域名绑定可稍后手动完成"
           fi
