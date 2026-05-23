@@ -55,15 +55,31 @@ jobs:
         run: |
           PROJECT_NUM=$(gcloud projects describe ${{ env.GCP_PROJECT }} --format='value(projectNumber)')
           CB_SA="${PROJECT_NUM}@cloudbuild.gserviceaccount.com"
+          COMPUTE_SA="${PROJECT_NUM}-compute@developer.gserviceaccount.com"
 
-          for role in roles/run.admin roles/iam.serviceAccountUser roles/artifactregistry.admin roles/storage.objectViewer; do
+          echo "=== 项目级权限: Cloud Build SA ==="
+          for role in roles/run.admin roles/artifactregistry.admin roles/storage.objectViewer; do
             gcloud projects add-iam-policy-binding ${{ env.GCP_PROJECT }} \
               --member="serviceAccount:${CB_SA}" \
               --role="${role}" \
               --condition=None \
-              --quiet 2>/dev/null || echo "  (已有 ${role} 或 无权限)"
+              --quiet 2>/dev/null || echo "  跳过 ${role}"
           done
-          echo "Cloud Build SA: ${CB_SA}"
+
+          echo "=== SA 级: Compute SA → act as Cloud Build SA (createBuild 调用方) ==="
+          gcloud iam service-accounts add-iam-policy-binding ${CB_SA} \
+            --member="serviceAccount:${COMPUTE_SA}" \
+            --role="roles/iam.serviceAccountUser" \
+            --quiet 2>/dev/null || echo "  跳过或已有"
+
+          echo "=== SA 级: Cloud Build SA → act as Compute SA (gcloud run deploy) ==="
+          gcloud iam service-accounts add-iam-policy-binding ${COMPUTE_SA} \
+            --member="serviceAccount:${CB_SA}" \
+            --role="roles/iam.serviceAccountUser" \
+            --quiet 2>/dev/null || echo "  跳过或已有"
+
+          echo "CB_SA=${CB_SA}"
+          echo "COMPUTE_SA=${COMPUTE_SA}"
 
       - name: Upload GCS credentials to Secret Manager
         run: |
