@@ -10,7 +10,7 @@
   <header class="header">
     <div class="header-inner">
       <h1>Auto GCloud</h1>
-      <span class="header-sub">二级域名 + 镜像托管全闭环部署</span>
+      <span class="header-sub">一键部署 Docker 镜像到 Google Cloud Run</span>
     </div>
   </header>
 
@@ -46,19 +46,9 @@
             placeholder="my-project-001"
             pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?"
             minlength="3" maxlength="63" required>
-          <span class="hint">3-63位，小写字母、数字、短横线</span>
+          <span class="hint">3-63位，小写字母、数字、短横线。将作为 Cloud Run 服务名</span>
         </div>
-        <div class="form-group">
-          <label for="subdomain">二级域名 <span class="required">*</span></label>
-          <div class="input-suffix">
-            <input type="text" id="subdomain" name="subdomain"
-              placeholder="admin"
-              pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?"
-              minlength="3" maxlength="20" required>
-            <span class="suffix" id="domainSuffix">.aihubflux.com</span>
-          </div>
-          <span class="hint">3-20位，小写字母、数字、短横线</span>
-        </div>
+        <input type="hidden" id="subdomain" value="">
         <div class="form-actions">
           <button type="button" class="btn btn-primary" onclick="nextStep(2)">下一步</button>
         </div>
@@ -70,11 +60,105 @@
           <div class="upload-icon">📦</div>
           <div class="upload-text">
             <strong>项目镜像</strong>
-            <span>拖拽 .tar 文件到此处或点击选择（镜像需包含前后端）</span>
+            <span>拖拽 .tar 文件到此处或点击选择</span>
           </div>
           <input type="file" id="projectImage" accept=".tar" class="upload-input">
           <div class="upload-status" id="imageStatus"></div>
         </div>
+
+        <details class="guide-box" id="guideBox">
+          <summary class="guide-summary">
+            📋 <span>不知道怎么打包镜像？点这里查看打包指南</span>
+          </summary>
+          <div class="guide-content">
+            <div class="guide-warn">
+              ⚠️ <strong>重要：</strong>镜像必须是 <code>linux/amd64</code> 架构，否则部署后会启动失败。
+              <span id="platformHint" class="platform-hint"></span>
+            </div>
+
+            <details class="starter-box">
+              <summary class="starter-summary">🎁 新手福利：一键生成示例项目（复制粘贴即可）</summary>
+              <div class="starter-content">
+                <p>执行以下命令，即可生成一个可部署的示例项目：</p>
+                <div class="code-block">
+                  <button class="copy-btn" onclick="copyCode(this)" data-code="starter-cmd">📋 复制全部</button>
+                  <pre id="starter-cmd">mkdir my-app && cd my-app
+
+cat > server.js << 'SERVEREOF'
+const http = require('http');
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end('&lt;h1&gt;部署成功！&lt;/h1&gt;');
+}).listen(PORT, () => console.log('服务启动: port=' + PORT));
+SERVEREOF
+
+cat > Dockerfile << 'DOCKEREOF'
+FROM node:20-alpine
+WORKDIR /app
+COPY server.js .
+ENV PORT=3000
+EXPOSE 3000
+CMD ["node", "server.js"]
+DOCKEREOF
+
+docker buildx build --platform linux/amd64 -t my-app:latest --load .
+docker save my-app:latest -o my-app.tar</pre>
+                </div>
+                <p class="guide-note">💡 执行完后会在当前目录生成 <code>my-app.tar</code>，直接上传即可。</p>
+              </div>
+            </details>
+
+            <div class="guide-step">
+              <div class="guide-step-num">1</div>
+              <div class="guide-step-body">
+                <strong>准备 Dockerfile</strong>
+                <p>确保你的应用监听 <code>PORT</code> 环境变量指定的端口（默认 <strong>3000</strong>）：</p>
+                <div class="code-block">
+                  <button class="copy-btn" onclick="copyCode(this)" data-code="guide-dockerfile">📋 复制</button>
+                  <pre id="guide-dockerfile"># Dockerfile 模板 - 确保你的应用监听 PORT 端口
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY . .
+ENV PORT=3000
+EXPOSE 3000
+CMD ["node", "server.js"]</pre>
+                </div>
+                <p class="guide-note">💡 如果已有 Dockerfile，只需确保端口逻辑一致即可，无需完全照抄。</p>
+              </div>
+            </div>
+
+            <div class="guide-step">
+              <div class="guide-step-num">2</div>
+              <div class="guide-step-body">
+                <strong>构建镜像（必须指定 linux/amd64）</strong>
+                <div class="code-block">
+                  <button class="copy-btn" onclick="copyCode(this)" data-code="guide-build">📋 复制</button>
+                  <pre id="guide-build"># macOS / Windows 用户必须加 --platform
+docker buildx build --platform linux/amd64 -t my-app:latest --load .
+
+# Linux 用户可以省略 --platform
+docker build -t my-app:latest .</pre>
+                </div>
+              </div>
+            </div>
+
+            <div class="guide-step">
+              <div class="guide-step-num">3</div>
+              <div class="guide-step-body">
+                <strong>导出为 .tar 文件</strong>
+                <div class="code-block">
+                  <button class="copy-btn" onclick="copyCode(this)" data-code="guide-tar">📋 复制</button>
+                  <pre id="guide-tar">docker save my-app:latest -o my-app.tar</pre>
+                </div>
+                <p class="guide-note">✅ 然后将生成的 <code>my-app.tar</code> 拖拽到上方上传区域即可。</p>
+              </div>
+            </div>
+          </div>
+        </details>
+
         <div class="form-actions">
           <button type="button" class="btn btn-secondary" onclick="prevStep(1)">上一步</button>
           <button type="button" class="btn btn-primary" onclick="nextStep(3)">下一步</button>
@@ -83,6 +167,7 @@
 
       <div class="step-panel hidden" id="step3">
         <h2>环境变量配置</h2>
+        <p class="env-hint">💡 <code>PORT=3000</code> 已自动注入，无需手动添加。下面配置你应用需要用到的其他环境变量：</p>
         <div class="env-editor">
           <div class="env-toolbar">
             <button type="button" class="btn btn-sm" onclick="generateTemplate()">加载默认模板</button>
@@ -110,7 +195,7 @@
             <span class="summary-value" id="summaryProjectId">-</span>
           </div>
           <div class="summary-row">
-            <span class="summary-label">访问域名</span>
+            <span class="summary-label">服务地址</span>
             <span class="summary-value" id="summaryDomain">-</span>
           </div>
           <div class="summary-row">
@@ -142,6 +227,9 @@
       <h2 id="resultTitle">上传完成</h2>
       <p id="resultMessage"></p>
       <div class="result-domain" id="resultDomain"></div>
+      <div style="margin-top:24px;">
+        <button class="btn btn-primary" onclick="resetToNewDeploy()">🔄 新建部署</button>
+      </div>
     </div>
   </main>
 

@@ -34,16 +34,11 @@ function prevStep(step) {
 function validateStep(step) {
   if (step === 1) {
     var pid = document.getElementById('projectId').value.trim();
-    var sub = document.getElementById('subdomain').value.trim();
     if (!pid || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(pid) || pid.length < 3) {
-      showToast('项目 ID 格式无效', 'error');
+      showToast('项目 ID 格式无效（3-63位小写字母、数字、短横线）', 'error');
       return false;
     }
-    if (!sub || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(sub) || sub.length < 3 || sub.length > 20) {
-      showToast('二级域名格式无效', 'error');
-      return false;
-    }
-    document.getElementById('domainSuffix').textContent = '.' + ROOT_DOMAIN;
+    document.getElementById('subdomain').value = pid;
     return true;
   }
   if (step === 2) {
@@ -60,7 +55,7 @@ function updateSummary() {
   var pid = document.getElementById('projectId').value.trim();
   var sub = document.getElementById('subdomain').value.trim();
   document.getElementById('summaryProjectId').textContent = pid || '-';
-  document.getElementById('summaryDomain').textContent = 'https://' + (sub || '???') + '.' + ROOT_DOMAIN;
+  document.getElementById('summaryDomain').textContent = '部署后自动分配';
   document.getElementById('summaryImage').textContent = projectFile ? projectFile.name : '-';
   document.getElementById('summaryEnvCount').textContent = envVars.filter(function(e) { return e.key; }).length + ' 个';
 }
@@ -263,57 +258,76 @@ function completeUpload(sessionId, callback) {
 }
 
 function pollDeployStatus(sessionId, callback) {
-  showUploadProgress(true, '正在后台组装文件...');
-  var attempts = 0;
-  var maxAttempts = 120;
+    showUploadProgress(true, '正在后台组装文件...');
+    var attempts = 0;
+    var maxAttempts = 120;
 
-  function poll() {
-    getJSON('/api/deploy-status/' + sessionId, function(err, status) {
-      if (err) {
+    function poll() {
+      getJSON('/api/deploy-status/' + sessionId, function(err, status) {
+        if (err) {
+          attempts++;
+          if (attempts >= maxAttempts) {
+            enableSubmitBtn();
+            return callback('查询状态超时，请刷新页面后重试');
+          }
+          setTimeout(poll, 2000);
+          return;
+        }
+
+        if (status.status === 'done' || status.serviceUrl) {
+          showUploadProgressBar(false);
+          enableSubmitBtn();
+          callback(null, {
+            success: true,
+            projectId: status.projectId,
+            subdomain: status.subdomain,
+            serviceUrl: status.serviceUrl,
+            message: 'Cloud Run 已部署完成'
+          });
+          return;
+        }
+
+        if (status.status === 'error') {
+          showUploadProgressBar(false);
+          enableSubmitBtn();
+          var errMsg = status.error || '后台处理出错';
+          if (status.buildLogUrl) {
+            errMsg += '\n📊 查看构建日志了解详情: ' + status.buildLogUrl;
+          }
+          callback(errMsg);
+          return;
+        }
+
+        var statusText = {
+          'assembling': '正在后台组装文件...',
+          'uploading': '正在上传至 GCS...',
+          'uploaded': '正在提交 Cloud Build...',
+          'deploying': 'Cloud Build 执行中（下载镜像 → 推送 → 部署）',
+          'processing': '正在处理...'
+        };
+        showUploadProgress(true, statusText[status.status] || '处理中...');
+
+        if (status.buildLogUrl) {
+          showBuildLogLink(status.buildLogUrl);
+        }
+
         attempts++;
         if (attempts >= maxAttempts) {
-          return callback('查询状态超时');
+          enableSubmitBtn();
+          return callback('处理超时，请刷新页面查看部署状态');
         }
         setTimeout(poll, 2000);
-        return;
-      }
+      });
+    }
 
-      if (status.status === 'done' || status.serviceUrl) {
-        showUploadProgressBar(false);
-        callback(null, {
-          success: true,
-          projectId: status.projectId,
-          subdomain: status.subdomain,
-          serviceUrl: status.serviceUrl,
-          message: 'Cloud Run 已部署完成'
-        });
-        return;
-      }
-
-      if (status.status === 'error') {
-        showUploadProgressBar(false);
-        callback(status.error || '后台处理出错');
-        return;
-      }
-
-      var statusText = {
-        'assembling': '正在组装文件...',
-        'uploading': '正在上传至 GCS...',
-        'uploaded': '正在提交 Cloud Build 部署...',
-        'deploying': 'Cloud Build 构建中...',
-        'processing': '正在处理...'
-      };
-      showUploadProgress(true, statusText[status.status] || '处理中...');
-      attempts++;
-      if (attempts >= maxAttempts) {
-        return callback('处理超时');
-      }
-      setTimeout(poll, 2000);
-    });
+    poll();
   }
 
-  poll();
-}
+  function enableSubmitBtn() {
+    var btn = document.getElementById('submitBtn');
+    btn.disabled = false;
+    btn.textContent = '🚀 提交部署';
+  }
 
 function showUploadProgress(show, text) {
   var wrap = document.getElementById('uploadProgressWrap');
@@ -361,7 +375,8 @@ function postJSON(url, data, callback) {
 
 function resetSubmitBtn(btn) {
   btn.disabled = false;
-  btn.textContent = '\uD83D\uDE80 提交部署';
+  btn.textContent = '🚀 提交部署';
+  showUploadProgressBar(false);
 }
 
 function updateUploadProgress(pct, text) {
@@ -374,6 +389,23 @@ function updateUploadProgress(pct, text) {
 function showUploadProgressBar(show) {
   var wrap = document.getElementById('uploadProgressWrap');
   if (wrap) wrap.classList.toggle('hidden', !show);
+  if (!show) {
+    var logLink = document.getElementById('buildLogLink');
+    if (logLink) logLink.classList.add('hidden');
+  }
+}
+
+function showBuildLogLink(url) {
+  var el = document.getElementById('buildLogLink');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'buildLogLink';
+    el.className = 'build-log-link';
+    var wrap = document.getElementById('uploadProgressWrap');
+    if (wrap) wrap.appendChild(el);
+  }
+  el.innerHTML = '📊 <a href="' + url + '" target="_blank">查看 Cloud Build 构建日志</a>';
+  el.classList.remove('hidden');
 }
 
 function showResult(result) {
@@ -385,15 +417,41 @@ function showResult(result) {
   var panel = document.getElementById('resultPanel');
   panel.classList.remove('hidden');
 
-  document.getElementById('resultIcon').textContent = '\u2705';
-  document.getElementById('resultTitle').textContent = '部署成功';
-  document.getElementById('resultMessage').textContent = result.message;
+  document.getElementById('resultIcon').textContent = '✅';
+  document.getElementById('resultTitle').textContent = '部署成功！';
+  document.getElementById('resultMessage').textContent = '你的服务已部署到 Google Cloud Run，可通过下方地址访问：';
   var url = result.serviceUrl;
-  document.getElementById('resultDomain').innerHTML = url
-    ? '<a href="' + url + '" target="_blank">' + url + '</a>'
-    : '等待 Cloud Run 分配地址...';
+  if (url) {
+    document.getElementById('resultDomain').innerHTML =
+      '<a href="' + url + '" target="_blank" style="font-size:18px;font-weight:700;">' + url + '</a>' +
+      '<br><small style="color:var(--text-secondary);margin-top:8px;display:block;">点击链接可在新标签页中打开</small>';
+  } else {
+    document.getElementById('resultDomain').innerHTML =
+      '<span style="color:var(--warning);">等待 Cloud Run 分配地址中...</span>' +
+      '<br><small style="color:var(--text-secondary);margin-top:8px;display:block;">通常需要 1-3 分钟</small>';
+  }
 
-  showToast('文件已上传至服务器并同步 GCS，等待部署', 'success');
+  showToast('部署成功！', 'success');
+}
+
+function resetToNewDeploy() {
+  document.getElementById('resultPanel').classList.add('hidden');
+  document.getElementById('deployForm').classList.remove('hidden');
+  document.querySelector('.steps').classList.remove('hidden');
+  document.getElementById('deployForm').reset();
+  projectFile = null;
+  document.getElementById('imageStatus').textContent = '';
+  document.getElementById('imageUpload').classList.remove('has-file');
+  currentStep = 1;
+  updateSteps();
+  prevStepButtons = [false, true, true, true];
+  var panels = document.querySelectorAll('.step-panel');
+  for (var i = 0; i < panels.length; i++) {
+    panels[i].classList.toggle('hidden', i !== 0);
+  }
+  var guideBox = document.getElementById('guideBox');
+  if (guideBox) guideBox.open = false;
+  showUploadProgressBar(false);
 }
 
 function showToast(message, type) {
@@ -410,6 +468,50 @@ function showToast(message, type) {
   }, 4000);
 }
 
+function copyCode(btn) {
+  var codeId = btn.getAttribute('data-code');
+  var el = document.getElementById(codeId);
+  if (!el) return;
+  var text = el.textContent;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() {
+      btn.textContent = '✅ 已复制';
+      btn.classList.add('copied');
+      setTimeout(function() { btn.textContent = '📋 复制'; btn.classList.remove('copied'); }, 2000);
+    });
+  } else {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    btn.textContent = '✅ 已复制';
+    btn.classList.add('copied');
+    setTimeout(function() { btn.textContent = '📋 复制'; btn.classList.remove('copied'); }, 2000);
+  }
+}
+
+(function detectPlatform() {
+  var hint = document.getElementById('platformHint');
+  if (!hint) return;
+  var ua = navigator.userAgent || '';
+  var isMac = /Mac/i.test(ua);
+  var isWin = /Win/i.test(ua);
+  if (isMac) {
+    hint.textContent = '🔔 检测到您使用 macOS，构建时务必加 --platform linux/amd64 参数';
+    hint.style.color = '#b45309';
+  } else if (isWin) {
+    hint.textContent = '🔔 检测到您使用 Windows，构建时务必加 --platform linux/amd64 参数';
+    hint.style.color = '#b45309';
+  } else {
+    hint.textContent = '✅ 您可能使用 Linux，可省略 --platform 参数';
+    hint.style.color = '#059669';
+  }
+})();
+
 document.getElementById('projectImage').addEventListener('change', function() {
   var status = document.getElementById('imageStatus');
   var area = document.getElementById('imageUpload');
@@ -424,10 +526,14 @@ document.getElementById('projectImage').addEventListener('change', function() {
   }
 });
 
-document.getElementById('deployForm').addEventListener('submit', function(e) {
-  e.preventDefault();
-  submitDeploy();
-});
+function handleSubmit(e) {
+    e.preventDefault();
+    var btn = document.getElementById('submitBtn');
+    if (btn.disabled) return;
+    submitDeploy();
+  }
+
+document.getElementById('deployForm').addEventListener('submit', handleSubmit);
 
 function formatSize(bytes) {
   if (!bytes) return '0 B';
