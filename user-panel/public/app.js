@@ -1,5 +1,12 @@
 var currentStep = 1;
 var projectFile = null;
+var AUTH_TOKEN = localStorage.getItem('auto_gcloud_token') || '';
+var AUTH_USER = null;
+
+try {
+  AUTH_USER = JSON.parse(localStorage.getItem('auto_gcloud_user') || 'null');
+} catch (_) {}
+
 var envVars = [
   { key: 'NODE_ENV', value: 'production' },
   { key: 'API_URL', value: '' },
@@ -8,6 +15,42 @@ var envVars = [
 
 var ROOT_DOMAIN = 'aihubflux.com';
 var CHUNK_SIZE = 5 * 1024 * 1024;
+
+function getAuthHeaders() {
+  return AUTH_TOKEN ? { 'Authorization': 'Bearer ' + AUTH_TOKEN } : {};
+}
+
+function requireLogin() {
+  if (!AUTH_TOKEN) {
+    showToast('请先登录', 'error');
+    setTimeout(function() {
+      window.location.href = '/login.html?redirect=' + encodeURIComponent(window.location.pathname);
+    }, 600);
+    return false;
+  }
+  return true;
+}
+
+function updateHeaderActions() {
+  var el = document.getElementById('headerActions');
+  if (!el) return;
+  if (AUTH_USER) {
+    var adminLink = AUTH_USER.role === 'admin' ? ' <a href="/admin.html" class="header-link">管理</a>' : '';
+    el.innerHTML = '<span class="header-user">' + esc(AUTH_USER.username) + '</span>' + adminLink +
+      ' <a href="#" class="header-link" onclick="logout();return false">退出</a>';
+  } else {
+    el.innerHTML = '<a href="/login.html" class="header-link">登录</a>';
+  }
+}
+
+function logout() {
+  localStorage.removeItem('auto_gcloud_token');
+  localStorage.removeItem('auto_gcloud_user');
+  AUTH_TOKEN = '';
+  AUTH_USER = null;
+  updateHeaderActions();
+  showToast('已退出登录', 'info');
+}
 
 function setStep(step) {
   document.querySelectorAll('.step').forEach(function(el, i) {
@@ -137,6 +180,7 @@ function updateYamlPreview() {
 }
 
 function submitDeploy() {
+  if (!requireLogin()) return;
   var submitBtn = document.getElementById('submitBtn');
   submitBtn.disabled = true;
   submitBtn.textContent = '\u23f3 初始化...';
@@ -214,6 +258,14 @@ function uploadChunk(sessionId, chunkIndex, totalChunks, blob, callback) {
   var xhr = new XMLHttpRequest();
 
   xhr.addEventListener('load', function() {
+    if (xhr.status === 401) {
+      AUTH_TOKEN = ''; AUTH_USER = null;
+      localStorage.removeItem('auto_gcloud_token');
+      localStorage.removeItem('auto_gcloud_user');
+      updateHeaderActions();
+      showToast('登录已过期，请重新登录', 'error');
+      return;
+    }
     if (xhr.status >= 200 && xhr.status < 300) {
       callback(null);
     } else {
@@ -229,6 +281,7 @@ function uploadChunk(sessionId, chunkIndex, totalChunks, blob, callback) {
 
   xhr.open('PUT', '/api/upload-chunk/' + sessionId + '?chunkIndex=' + chunkIndex + '&totalChunks=' + totalChunks);
   xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+  if (AUTH_TOKEN) xhr.setRequestHeader('Authorization', 'Bearer ' + AUTH_TOKEN);
   xhr.send(blob);
 }
 
@@ -339,6 +392,14 @@ function showUploadProgress(show, text) {
 function getJSON(url, callback) {
   var xhr = new XMLHttpRequest();
   xhr.addEventListener('load', function() {
+    if (xhr.status === 401) {
+      AUTH_TOKEN = ''; AUTH_USER = null;
+      localStorage.removeItem('auto_gcloud_token');
+      localStorage.removeItem('auto_gcloud_user');
+      updateHeaderActions();
+      showToast('登录已过期，请重新登录', 'error');
+      return;
+    }
     if (xhr.status >= 200 && xhr.status < 300) {
       callback(null, JSON.parse(xhr.responseText));
     } else {
@@ -351,12 +412,21 @@ function getJSON(url, callback) {
     callback('网络错误');
   });
   xhr.open('GET', url);
+  if (AUTH_TOKEN) xhr.setRequestHeader('Authorization', 'Bearer ' + AUTH_TOKEN);
   xhr.send();
 }
 
 function postJSON(url, data, callback) {
   var xhr = new XMLHttpRequest();
   xhr.addEventListener('load', function() {
+    if (xhr.status === 401) {
+      AUTH_TOKEN = ''; AUTH_USER = null;
+      localStorage.removeItem('auto_gcloud_token');
+      localStorage.removeItem('auto_gcloud_user');
+      updateHeaderActions();
+      showToast('登录已过期，请重新登录', 'error');
+      return;
+    }
     if (xhr.status >= 200 && xhr.status < 300) {
       callback(null, JSON.parse(xhr.responseText));
     } else {
@@ -370,6 +440,7 @@ function postJSON(url, data, callback) {
   });
   xhr.open('POST', url);
   xhr.setRequestHeader('Content-Type', 'application/json');
+  if (AUTH_TOKEN) xhr.setRequestHeader('Authorization', 'Bearer ' + AUTH_TOKEN);
   xhr.send(JSON.stringify(data));
 }
 
@@ -549,5 +620,6 @@ fetch('/api/health')
   })
   .catch(function() {});
 
+updateHeaderActions();
 setStep(1);
 renderEnvRows();

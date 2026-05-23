@@ -34,12 +34,18 @@ body {
   margin: 0 auto;
   padding: 0 24px;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 16px;
+  flex-wrap: wrap;
 }
 
 .header h1 { font-size: 24px; font-weight: 700; }
 .header-sub { opacity: 0.85; font-size: 14px; }
+
+.header-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.header-link { color: rgba(255,255,255,0.9); text-decoration: none; font-size: 13px; font-weight: 500; padding: 4px 10px; border-radius: 4px; transition: background 0.2s; }
+.header-link:hover { background: rgba(255,255,255,0.15); text-decoration: none; }
+.header-user { color: white; font-size: 13px; font-weight: 600; }
 
 .container {
   max-width: 800px;

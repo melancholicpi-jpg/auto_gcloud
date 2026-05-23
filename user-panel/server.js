@@ -6,6 +6,8 @@ const { Storage } = require('@google-cloud/storage');
 const { CloudBuildClient } = require('@google-cloud/cloudbuild');
 const YAML = require('yaml');
 const { v4: uuidv4 } = require('uuid');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 const REGION = process.env.REGION || 'asia-east1';
 const GCP_PROJECT = process.env.GCP_PROJECT || 'project-a8f8e3c3-9724-4306-9bb';
@@ -88,9 +90,189 @@ ${Object.entries(defaults).map(([k, v]) => `  ${k}: "${v}"`).join('\n')}
 }
 
 const app = express();
+
+const JWT_SECRET = process.env.JWT_SECRET || 'auto-gcloud-jwt-secret-' + (GCP_PROJECT || 'default');
+const USERS_FILE = 'admin/users.json';
+const TOKEN_EXPIRY = '7d';
+
+let users = [];
+
+async function loadUsers() {
+  if (!storage) return;
+  try {
+    const bucket = storage.bucket(GCS_BUCKET);
+    const [exists] = await bucket.file(USERS_FILE).exists();
+    if (exists) {
+      const [data] = await bucket.file(USERS_FILE).download();
+      users = JSON.parse(data.toString());
+      console.log(`已加载 ${users.length} 个用户`);
+    } else {
+      users = [];
+    }
+  } catch (err) {
+    console.error('加载用户数据失败:', err.message);
+    users = [];
+  }
+  await ensureAdminUser();
+}
+
+async function saveUsers() {
+  if (!storage) return;
+  try {
+    const bucket = storage.bucket(GCS_BUCKET);
+    await bucket.file(USERS_FILE).save(JSON.stringify(users, null, 2), {
+      contentType: 'application/json'
+    });
+  } catch (err) {
+    console.error('保存用户数据失败:', err.message);
+  }
+}
+
+async function ensureAdminUser() {
+  const adminExists = users.find(u => u.role === 'admin');
+  if (!adminExists) {
+    const hash = await bcrypt.hash('admin123', 10);
+    users.push({
+      id: uuidv4(),
+      username: 'admin',
+      password: hash,
+      role: 'admin',
+      enabled: true,
+      createdAt: new Date().toISOString()
+    });
+    console.log('已创建默认管理员: admin / admin123');
+    await saveUsers();
+  }
+}
+
+function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: '未登录' });
+  }
+  try {
+    const token = authHeader.slice(7);
+    const payload = jwt.verify(token, JWT_SECRET);
+    const user = users.find(u => u.id === payload.userId);
+    if (!user || !user.enabled) {
+      return res.status(401).json({ error: '账号已被禁用或不存在' });
+    }
+    req.user = user;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: '登录已过期，请重新登录' });
+  }
+}
+
+function adminMiddleware(req, res, next) {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: '需要管理员权限' });
+  }
+  next();
+}
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: '用户名和密码不能为空' });
+    }
+    if (!/^[a-zA-Z0-9_-]{3,32}$/.test(username)) {
+      return res.status(400).json({ error: '用户名格式无效（3-32位，字母数字下划线短横线）' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: '密码至少6位' });
+    }
+    if (users.find(u => u.username === username)) {
+      return res.status(400).json({ error: '用户名已存在' });
+    }
+    const hash = await bcrypt.hash(password, 10);
+    const user = {
+      id: uuidv4(),
+      username,
+      password: hash,
+      role: 'user',
+      enabled: true,
+      createdAt: new Date().toISOString()
+    };
+    users.push(user);
+    await saveUsers();
+    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
+    res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+  } catch (err) {
+    console.error('注册失败:', err.message);
+    res.status(500).json({ error: '注册失败' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: '用户名和密码不能为空' });
+    }
+    const user = users.find(u => u.username === username);
+    if (!user) {
+      return res.status(401).json({ error: '用户名或密码错误' });
+    }
+    if (!user.enabled) {
+      return res.status(401).json({ error: '账号已被禁用，请联系管理员' });
+    }
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) {
+      return res.status(401).json({ error: '用户名或密码错误' });
+    }
+    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
+    res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+  } catch (err) {
+    console.error('登录失败:', err.message);
+    res.status(500).json({ error: '登录失败' });
+  }
+});
+
+app.get('/api/auth/me', authMiddleware, (req, res) => {
+  res.json({ user: { id: req.user.id, username: req.user.username, role: req.user.role } });
+});
+
+app.get('/api/admin/users', authMiddleware, adminMiddleware, (req, res) => {
+  const list = users.map(u => ({
+    id: u.id,
+    username: u.username,
+    role: u.role,
+    enabled: u.enabled,
+    createdAt: u.createdAt
+  }));
+  res.json({ users: list });
+});
+
+app.post('/api/admin/users/:userId/toggle', authMiddleware, adminMiddleware, async (req, res) => {
+  const user = users.find(u => u.id === req.params.userId);
+  if (!user) {
+    return res.status(404).json({ error: '用户不存在' });
+  }
+  if (user.username === 'admin') {
+    return res.status(400).json({ error: '不能操作默认管理员' });
+  }
+  user.enabled = !user.enabled;
+  await saveUsers();
+  res.json({ success: true, enabled: user.enabled });
+});
+
+app.delete('/api/admin/users/:userId', authMiddleware, adminMiddleware, async (req, res) => {
+  const user = users.find(u => u.id === req.params.userId);
+  if (!user) {
+    return res.status(404).json({ error: '用户不存在' });
+  }
+  if (user.username === 'admin') {
+    return res.status(400).json({ error: '不能删除默认管理员' });
+  }
+  users = users.filter(u => u.id !== req.params.userId);
+  await saveUsers();
+  res.json({ success: true });
+});
 
 app.use((req, _res, next) => {
   if (req.method === 'POST' && req.path.startsWith('/api/')) {
@@ -120,7 +302,7 @@ app.get('/api/generate-template', (req, res) => {
   }) });
 });
 
-app.post('/api/init-upload', (req, res) => {
+app.post('/api/init-upload', authMiddleware, (req, res) => {
   const { fileName, totalSize } = req.body;
   if (!fileName) {
     return res.status(400).json({ error: '缺少文件名' });
@@ -143,6 +325,7 @@ app.post('/api/init-upload', (req, res) => {
 
 app.put('/api/upload-chunk/:sessionId',
   express.raw({ limit: CHUNK_SIZE + 1024 * 1024, type: 'application/octet-stream' }),
+  authMiddleware,
   (req, res) => {
     const { sessionId } = req.params;
     const chunkIndex = parseInt(req.query.chunkIndex, 10);
@@ -331,7 +514,7 @@ async function processDeploy(sessionId, session, projectId, subdomain, envVars) 
   try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch (_) {}
 }
 
-app.post('/api/complete-upload/:sessionId', (req, res) => {
+app.post('/api/complete-upload/:sessionId', authMiddleware, (req, res) => {
   const { sessionId } = req.params;
   const { projectId, subdomain, envVars } = req.body;
 
@@ -431,7 +614,8 @@ app.get('/api/health', (_req, res) => {
 });
 
 const PORT = process.env.PORT || 9002;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
+  await loadUsers();
   console.log(`管理面板: http://localhost:${PORT}`);
   console.log(`GCS 桶:   gs://${GCS_BUCKET}`);
   console.log(`域名:     *.${ROOT_DOMAIN}`);

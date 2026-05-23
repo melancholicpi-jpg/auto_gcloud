@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用户管理 - Auto GCloud</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .admin-page { max-width:800px; margin:0 auto; padding:24px; }
+    .admin-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:24px; flex-wrap:wrap; gap:12px; }
+    .admin-header h2 { font-size:22px; }
+    .admin-header .nav-links { display:flex; gap:12px; }
+    .admin-header .nav-links a { color:var(--primary); text-decoration:none; font-size:14px; font-weight:500; }
+    .admin-header .nav-links a:hover { text-decoration:underline; }
+    .user-table { width:100%; border-collapse:collapse; background:var(--card-bg); border-radius:var(--radius); overflow:hidden; box-shadow:var(--shadow); border:1px solid var(--border); }
+    .user-table th, .user-table td { padding:12px 16px; text-align:left; font-size:14px; }
+    .user-table th { background:#f8f9fa; font-weight:600; color:var(--text-secondary); border-bottom:2px solid var(--border); }
+    .user-table td { border-bottom:1px solid var(--border); }
+    .user-table tr:last-child td { border-bottom:none; }
+    .user-table .badge { display:inline-block; padding:2px 10px; border-radius:12px; font-size:12px; font-weight:600; }
+    .badge-admin { background:#e8f0fe; color:var(--primary); }
+    .badge-user { background:#f0fdf4; color:#059669; }
+    .badge-enabled { background:#dcfce7; color:#16a34a; }
+    .badge-disabled { background:#fee2e2; color:#dc2626; }
+    .btn-sm { padding:6px 14px; font-size:13px; border:none; border-radius:var(--radius); cursor:pointer; font-weight:600; transition:all 0.2s; }
+    .btn-toggle { background:#e8eaed; color:var(--text); }
+    .btn-toggle:hover { background:#dadce0; }
+    .btn-delete { background:#fee2e2; color:#dc2626; }
+    .btn-delete:hover { background:#fecaca; }
+    .btn-disabled { opacity:0.5; cursor:not-allowed; }
+    .loading-text { text-align:center; padding:32px; color:var(--text-secondary); }
+    .empty-text { text-align:center; padding:32px; color:var(--text-secondary); font-size:14px; }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <h1>Auto GCloud</h1>
+      <span class="header-sub">用户管理</span>
+    </div>
+  </header>
+
+  <main class="admin-page">
+    <div class="admin-header">
+      <h2>用户管理</h2>
+      <div class="nav-links">
+        <a href="/">← 部署面板</a>
+      </div>
+    </div>
+    <div class="loading-text" id="loadingText">加载中...</div>
+    <table class="user-table hidden" id="userTable">
+      <thead>
+        <tr>
+          <th>用户名</th>
+          <th>角色</th>
+          <th>状态</th>
+          <th>注册时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="userTbody"></tbody>
+    </table>
+    <div class="empty-text hidden" id="emptyText">暂无用户数据</div>
+  </main>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="admin.js"></script>
+</body>
+</html>

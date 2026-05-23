@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 - Auto GCloud</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .auth-page { display:flex; align-items:center; justify-content:center; min-height:100vh; background:var(--bg); }
+    .auth-card { background:var(--card-bg); border-radius:12px; box-shadow:0 4px 24px rgba(0,0,0,0.1); padding:40px; width:100%; max-width:400px; border:1px solid var(--border); }
+    .auth-card h2 { text-align:center; margin-bottom:8px; }
+    .auth-card .sub { text-align:center; color:var(--text-secondary); font-size:14px; margin-bottom:28px; }
+    .auth-card .form-group { margin-bottom:16px; }
+    .auth-card label { display:block; font-weight:600; margin-bottom:6px; font-size:14px; }
+    .auth-card input { width:100%; padding:10px 14px; border:1px solid var(--border); border-radius:var(--radius); font-size:15px; outline:none; }
+    .auth-card input:focus { border-color:var(--primary); box-shadow:0 0 0 2px rgba(66,133,244,0.2); }
+    .auth-card .btn { width:100%; padding:12px; font-size:15px; margin-top:8px; }
+    .auth-card .switch { text-align:center; margin-top:20px; font-size:13px; color:var(--text-secondary); }
+    .auth-card .switch a { color:var(--primary); cursor:pointer; text-decoration:none; font-weight:600; }
+    .auth-card .switch a:hover { text-decoration:underline; }
+    .auth-card .error-msg { color:var(--error); font-size:13px; margin-top:8px; text-align:center; display:none; }
+    .auth-card .error-msg.show { display:block; }
+  </style>
+</head>
+<body>
+  <div class="auth-page">
+    <div class="auth-card">
+      <h2 id="authTitle">登录</h2>
+      <p class="sub" id="authSub">登录以使用 Auto GCloud 部署服务</p>
+      <div class="form-group">
+        <label for="username">用户名</label>
+        <input type="text" id="username" placeholder="请输入用户名" autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label for="password">密码</label>
+        <input type="password" id="password" placeholder="请输入密码" autocomplete="current-password">
+      </div>
+      <div class="error-msg" id="errorMsg"></div>
+      <button class="btn btn-primary" id="submitBtn" onclick="handleAuth()">登 录</button>
+      <div class="switch" id="switchArea">
+        还没有账号？<a id="switchLink" onclick="toggleMode()">立即注册</a>
+      </div>
+      <div class="switch">
+        <a href="/" style="color:var(--text-secondary);">← 返回首页</a>
+      </div>
+    </div>
+  </div>
+  <div class="toast-container" id="toastContainer"></div>
+  <script src="login.js"></script>
+</body>
+</html>
