@@ -226,17 +226,27 @@ async function submitCloudBuildDeploy(session, projectId, subdomain, imageName, 
         args: ['cp', `gs://${GCS_BUCKET}/projects/${projectId}/${imageName}.tar`, '/workspace/image.tar']
       },
       {
+        name: 'gcr.io/cloud-builders/docker',
+        entrypoint: 'bash',
+        args: [
+          '-c',
+          [
+            'set -e',
+            'docker load -i /workspace/image.tar',
+            `LOADED_TAG=$$(docker images | tail -n +2 | head -1 | tr -s ' ' | cut -d' ' -f1,2 | tr ' ' ':')`,
+            `echo "Loaded image: $$LOADED_TAG"`,
+            `docker tag $$LOADED_TAG ${imageUrl}`,
+            `docker push ${imageUrl}`
+          ].join('\n')
+        ]
+      },
+      {
         name: 'gcr.io/google.com/cloudsdktool/cloud-sdk',
         entrypoint: 'bash',
         args: [
           '-c',
           [
             'set -e',
-            `gcloud auth configure-docker ${REGION} --quiet`,
-            'docker load -i /workspace/image.tar',
-            `LOADED_TAG=$$(docker images | tail -n +2 | head -1 | tr -s ' ' | cut -d' ' -f1,2 | tr ' ' ':')`,
-            `docker tag $$LOADED_TAG ${imageUrl}`,
-            `docker push ${imageUrl}`,
             `gcloud run deploy ${serviceName} --image=${imageUrl} --platform=managed --region=${REGION} --port=3000 --cpu=2 --memory=4Gi --min-instances=1 --max-instances=10 --allow-unauthenticated --concurrency=80 --timeout=600 --no-cpu-throttling --quiet` + (envString ? ` --set-env-vars="${envString}"` : ''),
             `SERVICE_URL=$$(gcloud run services describe ${serviceName} --region=${REGION} --format="value(status.url)")`,
             `echo "URL: $$SERVICE_URL"`,
