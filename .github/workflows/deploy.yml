@@ -51,6 +51,20 @@ jobs:
             --project=${{ env.GCP_PROJECT }} \
             || echo "::warning::CORS 配置失败，请用 gcs-service-account 手动执行: gcloud storage buckets update gs://${{ env.GCS_BUCKET }} --cors-file=gcs-cors.json"
 
+      - name: Grant Cloud Build permissions
+        run: |
+          PROJECT_NUM=$(gcloud projects describe ${{ env.GCP_PROJECT }} --format='value(projectNumber)')
+          CB_SA="${PROJECT_NUM}@cloudbuild.gserviceaccount.com"
+
+          for role in roles/run.admin roles/iam.serviceAccountUser roles/artifactregistry.admin roles/storage.objectViewer; do
+            gcloud projects add-iam-policy-binding ${{ env.GCP_PROJECT }} \
+              --member="serviceAccount:${CB_SA}" \
+              --role="${role}" \
+              --condition=None \
+              --quiet 2>/dev/null || echo "  (已有 ${role} 或 无权限)"
+          done
+          echo "Cloud Build SA: ${CB_SA}"
+
       - name: Upload GCS credentials to Secret Manager
         run: |
           echo '${{ secrets.GCS_CREDENTIALS_JSON }}' > /tmp/creds.json
