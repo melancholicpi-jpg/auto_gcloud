@@ -16,6 +16,11 @@ var envVars = [
 var ROOT_DOMAIN = 'aihubflux.com';
 var CHUNK_SIZE = 5 * 1024 * 1024;
 
+function esc(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 function getAuthHeaders() {
   return AUTH_TOKEN ? { 'Authorization': 'Bearer ' + AUTH_TOKEN } : {};
 }
@@ -38,9 +43,27 @@ function updateHeaderActions() {
     var adminLink = AUTH_USER.role === 'admin' ? ' <a href="/admin.html" class="header-link">管理</a>' : '';
     el.innerHTML = '<span class="header-user">' + esc(AUTH_USER.username) + '</span>' + adminLink +
       ' <a href="#" class="header-link" onclick="logout();return false">退出</a>';
+    loadDeployCount();
   } else {
     el.innerHTML = '<a href="/login.html" class="header-link">登录</a>';
+    document.getElementById('deployInfo').classList.add('hidden');
   }
+}
+
+function loadDeployCount() {
+  if (!AUTH_TOKEN) return;
+  getJSON('/api/user/codes', function(err, data) {
+    if (err) return;
+    var info = document.getElementById('deployInfo');
+    info.classList.remove('hidden');
+    if (data.total > 0) {
+      info.textContent = '剩余部署: ' + data.total + ' 次';
+      info.style.color = '#dcfce7';
+    } else {
+      info.textContent = '无可用部署次数';
+      info.style.color = '#fecaca';
+    }
+  });
 }
 
 function logout() {
@@ -328,9 +351,10 @@ function pollDeployStatus(sessionId, callback) {
         }
 
         if (status.status === 'done' || status.serviceUrl) {
-          showUploadProgressBar(false);
-          enableSubmitBtn();
-          callback(null, {
+                showUploadProgressBar(false);
+                enableSubmitBtn();
+                loadDeployCount();
+                callback(null, {
             success: true,
             projectId: status.projectId,
             subdomain: status.subdomain,

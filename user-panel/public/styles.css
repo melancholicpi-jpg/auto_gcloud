@@ -7,13 +7,15 @@
   --error: #ea4335;
   --warning: #fbbc04;
   --bg: #f8f9fa;
-  --card-bg: #ffffff;
-  --text: #202124;
-  --text-secondary: #5f6368;
-  --border: #dadce0;
-  --radius: 8px;
-  --shadow: 0 1px 3px rgba(0,0,0,0.1);
+   --card-bg: #ffffff;
+   --text: #202124;
+   --text-secondary: #5f6368;
+   --border: #dadce0;
+   --radius: 8px;
+   --shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
+
+.hidden { display: none !important; }
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -42,7 +44,9 @@ body {
 .header h1 { font-size: 24px; font-weight: 700; }
 .header-sub { opacity: 0.85; font-size: 14px; }
 
-.header-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.header-deploy-info { font-size: 13px; font-weight: 600; margin-left: auto; }
+
+.header-actions { display: flex; gap: 8px; align-items: center; }
 .header-link { color: rgba(255,255,255,0.9); text-decoration: none; font-size: 13px; font-weight: 500; padding: 4px 10px; border-radius: 4px; transition: background 0.2s; }
 .header-link:hover { background: rgba(255,255,255,0.15); text-decoration: none; }
 .header-user { color: white; font-size: 13px; font-weight: 600; }

@@ -3,65 +3,121 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>用户管理 - Auto GCloud</title>
+  <title>管理后台 - Auto GCloud</title>
   <link rel="stylesheet" href="styles.css">
   <style>
-    .admin-page { max-width:800px; margin:0 auto; padding:24px; }
-    .admin-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:24px; flex-wrap:wrap; gap:12px; }
+    .admin-page { max-width:900px; margin:0 auto; padding:24px; }
+    .admin-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; flex-wrap:wrap; gap:12px; }
     .admin-header h2 { font-size:22px; }
     .admin-header .nav-links { display:flex; gap:12px; }
     .admin-header .nav-links a { color:var(--primary); text-decoration:none; font-size:14px; font-weight:500; }
     .admin-header .nav-links a:hover { text-decoration:underline; }
+
+    .tabs { display:flex; gap:0; border-bottom:2px solid var(--border); margin-bottom:20px; }
+    .tab-btn { padding:10px 24px; border:none; background:none; font-size:14px; font-weight:600; color:var(--text-secondary); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-2px; transition:all 0.2s; }
+    .tab-btn.active { color:var(--primary); border-bottom-color:var(--primary); }
+    .tab-btn:hover { color:var(--text); }
+    .tab-content { display:none; }
+    .tab-content.active { display:block; }
+
     .user-table { width:100%; border-collapse:collapse; background:var(--card-bg); border-radius:var(--radius); overflow:hidden; box-shadow:var(--shadow); border:1px solid var(--border); }
-    .user-table th, .user-table td { padding:12px 16px; text-align:left; font-size:14px; }
+    .user-table th, .user-table td { padding:10px 14px; text-align:left; font-size:13px; }
     .user-table th { background:#f8f9fa; font-weight:600; color:var(--text-secondary); border-bottom:2px solid var(--border); }
     .user-table td { border-bottom:1px solid var(--border); }
     .user-table tr:last-child td { border-bottom:none; }
-    .user-table .badge { display:inline-block; padding:2px 10px; border-radius:12px; font-size:12px; font-weight:600; }
+    .badge { display:inline-block; padding:2px 10px; border-radius:12px; font-size:12px; font-weight:600; }
     .badge-admin { background:#e8f0fe; color:var(--primary); }
     .badge-user { background:#f0fdf4; color:#059669; }
     .badge-enabled { background:#dcfce7; color:#16a34a; }
     .badge-disabled { background:#fee2e2; color:#dc2626; }
-    .btn-sm { padding:6px 14px; font-size:13px; border:none; border-radius:var(--radius); cursor:pointer; font-weight:600; transition:all 0.2s; }
+    .badge-assigned { background:#e8f0fe; color:var(--primary); font-size:11px; }
+    .badge-unassigned { background:#f3f4f6; color:#6b7280; font-size:11px; }
+    .btn-sm { padding:6px 14px; font-size:12px; border:none; border-radius:var(--radius); cursor:pointer; font-weight:600; transition:all 0.2s; white-space:nowrap; }
     .btn-toggle { background:#e8eaed; color:var(--text); }
     .btn-toggle:hover { background:#dadce0; }
     .btn-delete { background:#fee2e2; color:#dc2626; }
     .btn-delete:hover { background:#fecaca; }
+    .btn-assign { background:#e8f0fe; color:var(--primary); }
+    .btn-assign:hover { background:#d2e3fc; }
     .btn-disabled { opacity:0.5; cursor:not-allowed; }
+    .btn-primary-sm { background:var(--primary); color:#fff; padding:8px 18px; font-size:13px; border:none; border-radius:var(--radius); cursor:pointer; font-weight:600; }
+    .btn-primary-sm:hover { opacity:0.9; }
     .loading-text { text-align:center; padding:32px; color:var(--text-secondary); }
     .empty-text { text-align:center; padding:32px; color:var(--text-secondary); font-size:14px; }
+
+    .gen-box { background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); padding:16px; margin-bottom:20px; display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
+    .gen-box label { display:block; font-size:12px; font-weight:600; margin-bottom:4px; color:var(--text-secondary); }
+    .gen-box input, .gen-box select { padding:8px 10px; border:1px solid var(--border); border-radius:var(--radius); font-size:13px; width:90px; }
+
+    .modal-overlay { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.4); z-index:100; justify-content:center; align-items:center; }
+    .modal-overlay.show { display:flex; }
+    .modal { background:var(--card-bg); border-radius:12px; padding:24px; min-width:300px; max-width:400px; box-shadow:0 8px 32px rgba(0,0,0,0.15); }
+    .modal h3 { margin-bottom:16px; }
+    .modal select { width:100%; padding:10px; border:1px solid var(--border); border-radius:var(--radius); font-size:14px; margin-bottom:16px; }
+    .modal .btn-row { display:flex; gap:8px; justify-content:flex-end; }
+    .btn-cancel { background:#e8eaed; padding:8px 20px; border:none; border-radius:var(--radius); cursor:pointer; font-weight:600; }
   </style>
 </head>
 <body>
   <header class="header">
     <div class="header-inner">
       <h1>Auto GCloud</h1>
-      <span class="header-sub">用户管理</span>
+      <span class="header-sub">管理后台</span>
     </div>
   </header>
 
   <main class="admin-page">
     <div class="admin-header">
-      <h2>用户管理</h2>
+      <h2 id="pageTitle">管理后台</h2>
       <div class="nav-links">
         <a href="/">← 部署面板</a>
       </div>
     </div>
-    <div class="loading-text" id="loadingText">加载中...</div>
-    <table class="user-table hidden" id="userTable">
-      <thead>
-        <tr>
-          <th>用户名</th>
-          <th>角色</th>
-          <th>状态</th>
-          <th>注册时间</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody id="userTbody"></tbody>
-    </table>
-    <div class="empty-text hidden" id="emptyText">暂无用户数据</div>
+
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('users')">用户管理</button>
+      <button class="tab-btn" onclick="switchTab('codes')">兑换码管理</button>
+    </div>
+
+    <div class="tab-content active" id="tab-users">
+      <div class="loading-text" id="usersLoading">加载中...</div>
+      <table class="user-table hidden" id="userTable">
+        <thead>
+          <tr><th>用户名</th><th>角色</th><th>状态</th><th>剩余部署</th><th>注册时间</th><th>操作</th></tr>
+        </thead>
+        <tbody id="userTbody"></tbody>
+      </table>
+      <div class="empty-text hidden" id="usersEmpty">暂无用户数据</div>
+    </div>
+
+    <div class="tab-content" id="tab-codes">
+      <div class="gen-box">
+        <div><label>前缀（可选）</label><input type="text" id="genPrefix" placeholder="如 VIP" style="width:80px;"></div>
+        <div><label>生成数量</label><input type="number" id="genCount" value="5" min="1" max="50" style="width:70px;"></div>
+        <div><label>每码次数</label><input type="number" id="genLimit" value="10" min="1" style="width:70px;"></div>
+        <button class="btn-primary-sm" onclick="generateCodes()">生成兑换码</button>
+      </div>
+      <div class="loading-text" id="codesLoading">加载中...</div>
+      <table class="user-table hidden" id="codeTable">
+        <thead>
+          <tr><th>兑换码</th><th>次数限制</th><th>已用/剩余</th><th>分配用户</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+        </thead>
+        <tbody id="codeTbody"></tbody>
+      </table>
+      <div class="empty-text hidden" id="codesEmpty">暂无兑换码，请先生成</div>
+    </div>
   </main>
+
+  <div class="modal-overlay" id="assignModal">
+    <div class="modal">
+      <h3>分配兑换码给用户</h3>
+      <select id="assignUserSelect"><option value="">请选择用户</option></select>
+      <div class="btn-row">
+        <button class="btn-cancel" onclick="closeAssignModal()">取消</button>
+        <button class="btn-primary-sm" onclick="doAssign()">确认分配</button>
+      </div>
+    </div>
+  </div>
 
   <div class="toast-container" id="toastContainer"></div>
 

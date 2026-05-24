@@ -93,9 +93,14 @@ const app = express();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'auto-gcloud-jwt-secret-' + (GCP_PROJECT || 'default');
 const USERS_FILE = 'admin/users.json';
+const CODES_FILE = 'admin/redeem-codes.json';
 const TOKEN_EXPIRY = '7d';
 
 let users = [];
+let redeemCodes = [];
+
+const captchaStore = new Map();
+const CAPTCHA_TTL = 5 * 60 * 1000;
 
 async function loadUsers() {
   if (!storage) return;
@@ -126,6 +131,54 @@ async function saveUsers() {
   } catch (err) {
     console.error('保存用户数据失败:', err.message);
   }
+}
+
+async function loadCodes() {
+  if (!storage) return;
+  try {
+    const bucket = storage.bucket(GCS_BUCKET);
+    const [exists] = await bucket.file(CODES_FILE).exists();
+    if (exists) {
+      const [data] = await bucket.file(CODES_FILE).download();
+      redeemCodes = JSON.parse(data.toString());
+      console.log(`已加载 ${redeemCodes.length} 个兑换码`);
+    } else {
+      redeemCodes = [];
+    }
+  } catch (err) {
+    console.error('加载兑换码数据失败:', err.message);
+    redeemCodes = [];
+  }
+}
+
+async function saveCodes() {
+  if (!storage) return;
+  try {
+    const bucket = storage.bucket(GCS_BUCKET);
+    await bucket.file(CODES_FILE).save(JSON.stringify(redeemCodes, null, 2), {
+      contentType: 'application/json'
+    });
+  } catch (err) {
+    console.error('保存兑换码数据失败:', err.message);
+  }
+}
+
+function getUserAvailableDeploys(userId) {
+  const codes = redeemCodes.filter(c => c.assignedTo === userId && c.enabled);
+  let total = 0;
+  for (const c of codes) {
+    const used = c.usedCount || 0;
+    if (c.limitCount > used) {
+      total += c.limitCount - used;
+    }
+  }
+  return { total, codes: codes.map(c => ({
+    id: c.id,
+    code: c.code,
+    limitCount: c.limitCount,
+    usedCount: c.usedCount || 0,
+    remaining: c.limitCount - (c.usedCount || 0)
+  })) };
 }
 
 async function ensureAdminUser() {
@@ -176,10 +229,23 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password, captchaId, captchaAnswer } = req.body;
     if (!username || !password) {
       return res.status(400).json({ error: '用户名和密码不能为空' });
     }
+    if (!captchaId || captchaAnswer === undefined) {
+      return res.status(400).json({ error: '请输入验证码' });
+    }
+    const captchaEntry = captchaStore.get(captchaId);
+    if (!captchaEntry || Date.now() > captchaEntry.expires) {
+      captchaStore.delete(captchaId);
+      return res.status(400).json({ error: '验证码已过期，请刷新后重试' });
+    }
+    if (parseInt(captchaAnswer, 10) !== captchaEntry.answer) {
+      captchaStore.delete(captchaId);
+      return res.status(400).json({ error: '验证码错误' });
+    }
+    captchaStore.delete(captchaId);
     if (!/^[a-zA-Z0-9_-]{3,32}$/.test(username)) {
       return res.status(400).json({ error: '用户名格式无效（3-32位，字母数字下划线短横线）' });
     }
@@ -274,6 +340,108 @@ app.delete('/api/admin/users/:userId', authMiddleware, adminMiddleware, async (r
   res.json({ success: true });
 });
 
+app.get('/api/captcha/generate', (_req, res) => {
+  const a = Math.floor(Math.random() * 90) + 10;
+  const b = Math.floor(Math.random() * 90) + 10;
+  const answer = a + b;
+  const captchaId = uuidv4();
+  captchaStore.set(captchaId, { answer, expires: Date.now() + CAPTCHA_TTL });
+  res.json({ captchaId, question: `${a} + ${b} = ?` });
+});
+
+app.post('/api/captcha/verify', (req, res) => {
+  const { captchaId, answer } = req.body;
+  if (!captchaId || answer === undefined) {
+    return res.status(400).json({ valid: false, error: '缺少验证参数' });
+  }
+  const entry = captchaStore.get(captchaId);
+  if (!entry) {
+    return res.status(400).json({ valid: false, error: '验证码已过期，请刷新' });
+  }
+  if (Date.now() > entry.expires) {
+    captchaStore.delete(captchaId);
+    return res.status(400).json({ valid: false, error: '验证码已过期，请刷新' });
+  }
+  const valid = parseInt(answer, 10) === entry.answer;
+  captchaStore.delete(captchaId);
+  res.json({ valid });
+});
+
+app.post('/api/admin/codes/generate', authMiddleware, adminMiddleware, async (req, res) => {
+  const { prefix, count, limitCount } = req.body;
+  const n = Math.min(count || 1, 50);
+  const limit = Math.max(limitCount || 1, 1);
+
+  const genCode = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const seg = () => { let s = ''; for (let i = 0; i < 4; i++) s += chars[Math.floor(Math.random() * chars.length)]; return s; };
+    return (prefix ? prefix.toUpperCase() + '-' : '') + seg() + '-' + seg();
+  };
+
+  const codes = [];
+  for (let i = 0; i < n; i++) {
+    let code = genCode();
+    while (redeemCodes.find(c => c.code === code)) code = genCode();
+    const entry = {
+      id: uuidv4(),
+      code,
+      limitCount: limit,
+      usedCount: 0,
+      assignedTo: null,
+      enabled: true,
+      createdAt: new Date().toISOString()
+    };
+    redeemCodes.push(entry);
+    codes.push(entry);
+  }
+  await saveCodes();
+  console.log(`管理员生成了 ${codes.length} 个兑换码`);
+  res.json({ codes: codes.map(c => ({ id: c.id, code: c.code, limitCount: c.limitCount })) });
+});
+
+app.get('/api/admin/codes', authMiddleware, adminMiddleware, (_req, res) => {
+  const list = redeemCodes.map(c => ({
+    id: c.id,
+    code: c.code,
+    limitCount: c.limitCount,
+    usedCount: c.usedCount || 0,
+    assignedTo: c.assignedTo,
+    enabled: c.enabled,
+    createdAt: c.createdAt
+  }));
+  res.json({ codes: list });
+});
+
+app.post('/api/admin/codes/:codeId/toggle', authMiddleware, adminMiddleware, async (req, res) => {
+  const c = redeemCodes.find(x => x.id === req.params.codeId);
+  if (!c) return res.status(404).json({ error: '兑换码不存在' });
+  c.enabled = !c.enabled;
+  await saveCodes();
+  res.json({ success: true, enabled: c.enabled });
+});
+
+app.post('/api/admin/codes/:codeId/assign', authMiddleware, adminMiddleware, async (req, res) => {
+  const c = redeemCodes.find(x => x.id === req.params.codeId);
+  if (!c) return res.status(404).json({ error: '兑换码不存在' });
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: '请指定用户' });
+  const user = users.find(u => u.id === userId);
+  if (!user) return res.status(400).json({ error: '用户不存在' });
+  c.assignedTo = userId;
+  await saveCodes();
+  res.json({ success: true, assignedTo: userId });
+});
+
+app.delete('/api/admin/codes/:codeId', authMiddleware, adminMiddleware, async (req, res) => {
+  redeemCodes = redeemCodes.filter(c => c.id !== req.params.codeId);
+  await saveCodes();
+  res.json({ success: true });
+});
+
+app.get('/api/user/codes', authMiddleware, (req, res) => {
+  res.json(getUserAvailableDeploys(req.user.id));
+});
+
 app.use((req, _res, next) => {
   if (req.method === 'POST' && req.path.startsWith('/api/')) {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
@@ -306,6 +474,11 @@ app.post('/api/init-upload', authMiddleware, (req, res) => {
   const { fileName, totalSize } = req.body;
   if (!fileName) {
     return res.status(400).json({ error: '缺少文件名' });
+  }
+
+  const available = getUserAvailableDeploys(req.user.id);
+  if (available.total <= 0) {
+    return res.status(403).json({ error: '没有可用的部署次数，请联系管理员分配兑换码' });
   }
 
   const sessionId = uuidv4();
@@ -514,7 +687,7 @@ async function processDeploy(sessionId, session, projectId, subdomain, envVars) 
   try { fs.rmSync(chunkDir, { recursive: true, force: true }); } catch (_) {}
 }
 
-app.post('/api/complete-upload/:sessionId', authMiddleware, (req, res) => {
+app.post('/api/complete-upload/:sessionId', authMiddleware, async (req, res) => {
   const { sessionId } = req.params;
   const { projectId, subdomain, envVars } = req.body;
 
@@ -543,7 +716,22 @@ app.post('/api/complete-upload/:sessionId', authMiddleware, (req, res) => {
   session.status = 'processing';
   session.projectId = projectId;
   session.subdomain = subdomain;
+  session.userId = req.user.id;
   console.log(`[${sessionId}] 已接收，后台处理中...`);
+
+  const available = getUserAvailableDeploys(req.user.id);
+  if (available.total <= 0) {
+    session.status = 'error';
+    session.error = '没有可用的部署次数';
+    return res.status(403).json({ error: '没有可用的部署次数，请联系管理员' });
+  }
+
+  const codeToUse = redeemCodes.find(c => c.assignedTo === req.user.id && c.enabled && c.limitCount > (c.usedCount || 0));
+  if (codeToUse) {
+    codeToUse.usedCount = (codeToUse.usedCount || 0) + 1;
+    await saveCodes();
+    console.log(`[${req.user.username}] 兑换码 ${codeToUse.code} 扣减 1 次，剩余 ${codeToUse.limitCount - codeToUse.usedCount} 次`);
+  }
 
   processDeploy(sessionId, session, projectId, subdomain, envVars);
 
@@ -616,6 +804,7 @@ app.get('/api/health', (_req, res) => {
 const PORT = process.env.PORT || 9002;
 app.listen(PORT, async () => {
   await loadUsers();
+  await loadCodes();
   console.log(`管理面板: http://localhost:${PORT}`);
   console.log(`GCS 桶:   gs://${GCS_BUCKET}`);
   console.log(`域名:     *.${ROOT_DOMAIN}`);

@@ -1,4 +1,5 @@
 var isLogin = true;
+var captchaId = null;
 
 function showToast(message, type) {
   type = type || 'info';
@@ -21,8 +22,18 @@ function showError(msg) {
 }
 
 function hideError() {
-  var el = document.getElementById('errorMsg');
-  el.classList.remove('show');
+  document.getElementById('errorMsg').classList.remove('show');
+}
+
+function refreshCaptcha() {
+  var xhr = new XMLHttpRequest();
+  xhr.addEventListener('load', function() {
+    var data = JSON.parse(xhr.responseText);
+    captchaId = data.captchaId;
+    document.getElementById('captchaQuestion').textContent = data.question;
+  });
+  xhr.open('GET', '/api/captcha/generate');
+  xhr.send();
 }
 
 function toggleMode() {
@@ -34,6 +45,15 @@ function toggleMode() {
     ? '还没有账号？<a id="switchLink" onclick="toggleMode()">立即注册</a>'
     : '已有账号？<a id="switchLink" onclick="toggleMode()">去登录</a>';
   document.getElementById('password').setAttribute('autocomplete', isLogin ? 'current-password' : 'new-password');
+
+  var captchaGroup = document.getElementById('captchaGroup');
+  if (isLogin) {
+    captchaGroup.classList.add('hidden');
+    captchaId = null;
+  } else {
+    captchaGroup.classList.remove('hidden');
+    refreshCaptcha();
+  }
   hideError();
 }
 
@@ -50,18 +70,29 @@ function handleAuth() {
   if (!username) { showError('请输入用户名'); return; }
   if (!password) { showError('请输入密码'); return; }
 
+  if (!isLogin) {
+    var captchaAnswer = document.getElementById('captchaInput').value.trim();
+    if (!captchaAnswer) { showError('请输入验证码'); return; }
+  }
+
   var btn = document.getElementById('submitBtn');
   btn.disabled = true;
   btn.textContent = isLogin ? '登录中...' : '注册中...';
 
   var url = isLogin ? '/api/auth/login' : '/api/auth/register';
+  var body = { username: username, password: password };
+  if (!isLogin) {
+    body.captchaId = captchaId;
+    body.captchaAnswer = captchaAnswer;
+  }
 
-  postJSON(url, { username: username, password: password }, function(err, data) {
+  postJSON(url, body, function(err, data) {
     btn.disabled = false;
     btn.textContent = isLogin ? '登 录' : '注 册';
 
     if (err) {
       showError(typeof err === 'string' ? err : '请求失败');
+      if (!isLogin) refreshCaptcha();
       return;
     }
 
@@ -91,9 +122,7 @@ function postJSON(url, data, callback) {
       callback(msg);
     }
   });
-  xhr.addEventListener('error', function() {
-    callback('网络错误');
-  });
+  xhr.addEventListener('error', function() { callback('网络错误'); });
   xhr.open('POST', url);
   xhr.setRequestHeader('Content-Type', 'application/json');
   xhr.send(JSON.stringify(data));
