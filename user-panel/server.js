@@ -233,14 +233,19 @@ async function recordDeploy({ userId, username, projectId, subdomain, imageName,
   return record;
 }
 
-async function updateDeployStatus(buildId, status, serviceUrl, error) {
-  const record = deployHistory.find(r => r.buildId === buildId);
+async function updateDeployStatus(buildId, projectId, status, serviceUrl, error) {
+  let record = deployHistory.find(r => r.buildId && r.buildId === buildId);
+  if (!record && projectId) {
+    record = deployHistory.find(r => r.projectId === projectId && r.status === 'deploying');
+  }
   if (record) {
     record.status = status;
+    if (buildId && !record.buildId) record.buildId = buildId;
     if (serviceUrl) record.serviceUrl = serviceUrl;
     if (error) record.error = error;
     record.completedAt = new Date().toISOString();
     await saveHistory();
+    console.log(`[history] 更新部署状态: ${record.projectId} → ${status}`);
   }
 }
 
@@ -923,7 +928,10 @@ app.get('/api/deploy-status/:sessionId', async (req, res) => {
     return res.json({ status: 'gone', message: '部署已完成或会话已过期' });
   }
 
-  if (!session.serviceUrl && session.status === 'deploying' && session.projectId && storage) {
+  const hasUrl = session.serviceUrl && session.status === 'done';
+  const shouldCheckUrl = !session.serviceUrl || session.status === 'deploying';
+
+  if (shouldCheckUrl && session.projectId && storage) {
     try {
       const [data] = await storage.bucket(GCS_BUCKET)
         .file(`projects/${session.projectId}/service-url.txt`)
@@ -931,13 +939,16 @@ app.get('/api/deploy-status/:sessionId', async (req, res) => {
       const url = data.toString().trim();
       if (url && url.startsWith('https://')) {
         session.serviceUrl = url;
-        session.status = 'done';
-        if (session.buildId) {
-          await updateDeployStatus(session.buildId, 'success', url);
+        if (session.status !== 'done') {
+          session.status = 'done';
+          console.log(`[${session.projectId}] 服务已部署: ${url}`);
         }
-        console.log(`[${session.projectId}] 服务已部署: ${url}`);
       }
     } catch (_) {}
+  }
+
+  if (session.serviceUrl && session.status === 'done') {
+    await updateDeployStatus(session.buildId, session.projectId, 'success', session.serviceUrl);
   }
 
   const result = {

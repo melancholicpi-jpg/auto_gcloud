@@ -432,12 +432,11 @@ function loadHistoryPage(page) {
           '</div>' +
           '<div class="hc-body">' +
             '<div><span class="hc-label">镜像</span>' + esc(r.imageName) + '</div>' +
-            '<div><span class="hc-label">域名</span>' + esc(r.subdomain) + '.aihubflux.com</div>' +
+            '<div><span class="hc-label">域名</span>' + (r.serviceUrl ? '<a href="' + esc(r.serviceUrl) + '" target="_blank" style="color:var(--primary);font-size:12px;">' + esc(r.serviceUrl) + '</a>' : esc(r.subdomain) + '.aihubflux.com') + '</div>' +
             '<div><span class="hc-label">大小</span>' + formatSize(r.fileSize) + '</div>' +
             (r.codeUsed ? '<div><span class="hc-label">兑换码</span><code style="font-size:11px;background:#f3f4f6;padding:1px 6px;border-radius:3px;">' + esc(r.codeUsed) + '</code></div>' : '') +
             '<div><span class="hc-label">时间</span>' + formatDateTime(r.createdAt) + '</div>' +
-            (r.serviceUrl ? '<div><span class="hc-label">地址</span><a href="' + r.serviceUrl + '" target="_blank" style="color:var(--primary);font-size:12px;">' + r.serviceUrl + '</a></div>' : '') +
-            (r.error ? '<div style="color:var(--error);font-size:12px;grid-column:1/-1;">错误: ' + esc(r.error) + '</div>' : '') +
+        (r.error ? '<div style="color:var(--error);font-size:12px;grid-column:1/-1;">错误: ' + esc(r.error) + '</div>' : '') +
           '</div>';
         listEl.appendChild(div);
       });
