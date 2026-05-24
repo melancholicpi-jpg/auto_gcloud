@@ -44,9 +44,11 @@ function updateHeaderActions() {
     el.innerHTML = '<span class="header-user">' + esc(AUTH_USER.username) + '</span>' + adminLink +
       ' <a href="#" class="header-link" onclick="logout();return false">退出</a>';
     loadDeployCount();
+    loadMyHistory();
   } else {
     el.innerHTML = '<a href="/login.html" class="header-link">登录</a>';
     document.getElementById('deployInfo').classList.add('hidden');
+    document.getElementById('historyPanel').classList.add('hidden');
   }
 }
 
@@ -620,6 +622,63 @@ document.getElementById('projectImage').addEventListener('change', function() {
     area.classList.remove('has-file');
   }
 });
+
+function formatDateTime(isoStr) {
+  if (!isoStr) return '-';
+  var d = new Date(isoStr);
+  var pad = function(n) { return n < 10 ? '0' + n : n; };
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
+    pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+}
+
+function getStatusBadge(status) {
+  if (status === 'success') return '<span class="badge badge-enabled">成功</span>';
+  if (status === 'error') return '<span class="badge badge-disabled">失败</span>';
+  if (status === 'deploying') return '<span class="badge" style="background:#dbeafe;color:#1d4ed8;">部署中</span>';
+  return '<span class="badge badge-unassigned">' + status + '</span>';
+}
+
+function loadMyHistory() {
+  if (!AUTH_TOKEN) return;
+  getJSON('/api/user/history', function(err, data) {
+    var panel = document.getElementById('historyPanel');
+    var loadingEl = document.getElementById('historyLoading');
+    var emptyEl = document.getElementById('historyEmpty');
+    var listEl = document.getElementById('historyList');
+
+    if (err) { panel.classList.add('hidden'); return; }
+    panel.classList.remove('hidden');
+    loadingEl.classList.add('hidden');
+
+    if (!data.records || data.records.length === 0) {
+      emptyEl.classList.remove('hidden');
+      listEl.innerHTML = '';
+      return;
+    }
+    emptyEl.classList.add('hidden');
+    listEl.innerHTML = '';
+
+    data.records.forEach(function(r) {
+      var div = document.createElement('div');
+      div.className = 'history-card';
+      div.innerHTML =
+        '<div class="hc-header">' +
+          '<strong>' + esc(r.imageName) + '</strong>' +
+          getStatusBadge(r.status) +
+        '</div>' +
+        '<div class="hc-body">' +
+          '<div><span class="hc-label">项目</span>' + esc(r.projectId) + '</div>' +
+          '<div><span class="hc-label">域名</span>' + esc(r.subdomain) + '.' + ROOT_DOMAIN + '</div>' +
+          '<div><span class="hc-label">大小</span>' + formatSize(r.fileSize) + '</div>' +
+          (r.codeUsed ? '<div><span class="hc-label">兑换码</span><code style="font-size:11px;background:#f3f4f6;padding:1px 6px;border-radius:3px;">' + esc(r.codeUsed) + '</code></div>' : '') +
+          '<div><span class="hc-label">时间</span>' + formatDateTime(r.createdAt) + '</div>' +
+          (r.serviceUrl ? '<div><span class="hc-label">地址</span><a href="' + r.serviceUrl + '" target="_blank" style="color:var(--primary);font-size:12px;">' + r.serviceUrl + '</a></div>' : '') +
+          (r.error ? '<div style="color:var(--error);font-size:12px;margin-top:4px;">' + esc(r.error) + '</div>' : '') +
+        '</div>';
+      listEl.appendChild(div);
+    });
+  });
+}
 
 function handleSubmit(e) {
     e.preventDefault();

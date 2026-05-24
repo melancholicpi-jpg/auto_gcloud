@@ -235,6 +235,13 @@ docker build -t my-app:latest .</pre>
         <button class="btn btn-primary" onclick="resetToNewDeploy()">🔄 新建部署</button>
       </div>
     </div>
+
+    <div class="history-panel hidden" id="historyPanel">
+      <h2>我的部署记录</h2>
+      <div class="loading-text" id="historyLoading">加载中...</div>
+      <div class="empty-text hidden" id="historyEmpty">暂无部署记录</div>
+      <div class="history-list" id="historyList"></div>
+    </div>
   </main>
 
   <div class="toast-container" id="toastContainer"></div>

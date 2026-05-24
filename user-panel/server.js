@@ -98,6 +98,7 @@ const TOKEN_EXPIRY = '7d';
 
 let users = [];
 let redeemCodes = [];
+let deployHistory = [];
 
 const captchaStore = new Map();
 const CAPTCHA_TTL = 5 * 60 * 1000;
@@ -179,6 +180,68 @@ function getUserAvailableDeploys(userId) {
     usedCount: c.usedCount || 0,
     remaining: c.limitCount - (c.usedCount || 0)
   })) };
+}
+
+async function loadHistory() {
+  if (!storage) return;
+  try {
+    const bucket = storage.bucket(GCS_BUCKET);
+    const [exists] = await bucket.file('admin/deploy-history.json').exists();
+    if (exists) {
+      const [data] = await bucket.file('admin/deploy-history.json').download();
+      deployHistory = JSON.parse(data.toString());
+      console.log(`已加载 ${deployHistory.length} 条部署记录`);
+    } else {
+      deployHistory = [];
+    }
+  } catch (err) {
+    console.error('加载部署历史失败:', err.message);
+    deployHistory = [];
+  }
+}
+
+async function saveHistory() {
+  if (!storage) return;
+  try {
+    const bucket = storage.bucket(GCS_BUCKET);
+    await bucket.file('admin/deploy-history.json').save(JSON.stringify(deployHistory, null, 2), {
+      contentType: 'application/json'
+    });
+  } catch (err) {
+    console.error('保存部署历史失败:', err.message);
+  }
+}
+
+async function recordDeploy({ userId, username, projectId, subdomain, imageName, fileName, fileSize, buildId, codeUsed }) {
+  const record = {
+    id: uuidv4(),
+    userId,
+    username,
+    projectId,
+    subdomain,
+    imageName,
+    fileName,
+    fileSize,
+    buildId,
+    codeUsed: codeUsed || null,
+    status: 'deploying',
+    createdAt: new Date().toISOString()
+  };
+  deployHistory.unshift(record);
+  await saveHistory();
+  console.log(`[history] 记录部署: ${username} → ${projectId}`);
+  return record;
+}
+
+async function updateDeployStatus(buildId, status, serviceUrl, error) {
+  const record = deployHistory.find(r => r.buildId === buildId);
+  if (record) {
+    record.status = status;
+    if (serviceUrl) record.serviceUrl = serviceUrl;
+    if (error) record.error = error;
+    record.completedAt = new Date().toISOString();
+    await saveHistory();
+  }
 }
 
 async function ensureAdminUser() {
@@ -442,6 +505,96 @@ app.get('/api/user/codes', authMiddleware, (req, res) => {
   res.json(getUserAvailableDeploys(req.user.id));
 });
 
+app.get('/api/user/history', authMiddleware, (req, res) => {
+  const records = deployHistory
+    .filter(r => r.userId === req.user.id)
+    .slice(0, 50)
+    .map(r => ({
+      id: r.id,
+      projectId: r.projectId,
+      subdomain: r.subdomain,
+      imageName: r.imageName,
+      fileName: r.fileName,
+      fileSize: r.fileSize,
+      status: r.status,
+      serviceUrl: r.serviceUrl || null,
+      buildId: r.buildId,
+      error: r.error || null,
+      codeUsed: r.codeUsed,
+      createdAt: r.createdAt,
+      completedAt: r.completedAt || null
+    }));
+  res.json({ records });
+});
+
+app.get('/api/admin/history', authMiddleware, adminMiddleware, (req, res) => {
+  const { page, limit } = req.query;
+  const p = Math.max(parseInt(page, 10) || 1, 1);
+  const l = Math.min(Math.max(parseInt(limit, 10) || 20, 5), 100);
+  const start = (p - 1) * l;
+  const records = deployHistory.slice(start, start + l).map(r => ({
+    id: r.id,
+    userId: r.userId,
+    username: r.username,
+    projectId: r.projectId,
+    subdomain: r.subdomain,
+    imageName: r.imageName,
+    fileName: r.fileName,
+    fileSize: r.fileSize,
+    status: r.status,
+    serviceUrl: r.serviceUrl || null,
+    buildId: r.buildId,
+    error: r.error || null,
+    codeUsed: r.codeUsed,
+    createdAt: r.createdAt,
+    completedAt: r.completedAt || null
+  }));
+  res.json({ records, total: deployHistory.length, page: p, limit: l });
+});
+
+app.get('/api/admin/stats', authMiddleware, adminMiddleware, (req, res) => {
+  const totalDeploys = deployHistory.length;
+  const successDeploys = deployHistory.filter(r => r.status === 'success').length;
+  const failedDeploys = deployHistory.filter(r => r.status === 'error').length;
+  const deployingDeploys = deployHistory.filter(r => r.status === 'deploying').length;
+
+  const userStats = {};
+  for (const r of deployHistory) {
+    if (!userStats[r.userId]) {
+      userStats[r.userId] = { userId: r.userId, username: r.username, total: 0, success: 0, failed: 0 };
+    }
+    userStats[r.userId].total++;
+    if (r.status === 'success') userStats[r.userId].success++;
+    if (r.status === 'error') userStats[r.userId].failed++;
+  }
+
+  const totalFileSize = deployHistory.reduce((s, r) => s + (r.fileSize || 0), 0);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const todayDeploys = deployHistory.filter(r => r.createdAt && r.createdAt.slice(0, 10) === today).length;
+
+  res.json({
+    overview: {
+      totalDeploys,
+      successDeploys,
+      failedDeploys,
+      deployingDeploys,
+      todayDeploys,
+      totalFileSize,
+      totalFileSizeMB: (totalFileSize / 1024 / 1024).toFixed(1)
+    },
+    userStats: Object.values(userStats).sort((a, b) => b.total - a.total),
+    recentDeploys: deployHistory.slice(0, 10).map(r => ({
+      username: r.username,
+      projectId: r.projectId,
+      imageName: r.imageName,
+      status: r.status,
+      serviceUrl: r.serviceUrl || null,
+      createdAt: r.createdAt
+    }))
+  });
+});
+
 app.use((req, _res, next) => {
   if (req.method === 'POST' && req.path.startsWith('/api/')) {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
@@ -624,6 +777,11 @@ async function submitCloudBuildDeploy(session, projectId, subdomain, imageName, 
     const buildId = operation.metadata.build.id;
     session.buildId = buildId;
     session.buildLogUrl = `https://console.cloud.google.com/cloud-build/builds/${buildId}?project=${GCP_PROJECT}`;
+    const recent = deployHistory.find(r => r.projectId === projectId && !r.buildId);
+    if (recent) {
+      recent.buildId = buildId;
+      await saveHistory();
+    }
     console.log(`[${projectId}] Cloud Build 已提交: ${buildId}`);
     console.log(`[${projectId}] 日志: ${session.buildLogUrl}`);
     return { buildId, logUrl: session.buildLogUrl };
@@ -727,11 +885,26 @@ app.post('/api/complete-upload/:sessionId', authMiddleware, async (req, res) => 
   }
 
   const codeToUse = redeemCodes.find(c => c.assignedTo === req.user.id && c.enabled && c.limitCount > (c.usedCount || 0));
+  let codeUsedStr = null;
   if (codeToUse) {
     codeToUse.usedCount = (codeToUse.usedCount || 0) + 1;
     await saveCodes();
+    codeUsedStr = codeToUse.code;
     console.log(`[${req.user.username}] 兑换码 ${codeToUse.code} 扣减 1 次，剩余 ${codeToUse.limitCount - codeToUse.usedCount} 次`);
   }
+
+  const imageName = session.fileName.replace('.tar', '');
+  await recordDeploy({
+    userId: req.user.id,
+    username: req.user.username,
+    projectId,
+    subdomain,
+    imageName,
+    fileName: session.fileName,
+    fileSize: session.totalSize,
+    buildId: null,
+    codeUsed: codeUsedStr
+  });
 
   processDeploy(sessionId, session, projectId, subdomain, envVars);
 
@@ -759,6 +932,9 @@ app.get('/api/deploy-status/:sessionId', async (req, res) => {
       if (url && url.startsWith('https://')) {
         session.serviceUrl = url;
         session.status = 'done';
+        if (session.buildId) {
+          await updateDeployStatus(session.buildId, 'success', url);
+        }
         console.log(`[${session.projectId}] 服务已部署: ${url}`);
       }
     } catch (_) {}
@@ -805,6 +981,7 @@ const PORT = process.env.PORT || 9002;
 app.listen(PORT, async () => {
   await loadUsers();
   await loadCodes();
+  await loadHistory();
   console.log(`管理面板: http://localhost:${PORT}`);
   console.log(`GCS 桶:   gs://${GCS_BUCKET}`);
   console.log(`域名:     *.${ROOT_DOMAIN}`);

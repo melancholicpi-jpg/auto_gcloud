@@ -109,6 +109,7 @@ function switchTab(name) {
   document.querySelector('.tab-btn[onclick*="' + name + '"]').classList.add('active');
   document.getElementById('tab-' + name).classList.add('active');
   if (name === 'codes') loadCodes();
+  if (name === 'stats') loadStats();
 }
 
 // ========== Users ==========
@@ -319,6 +320,135 @@ function loadCodes() {
 function esc(s) {
   if (!s) return '';
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function formatSize(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  var units = ['B', 'KB', 'MB', 'GB'];
+  var i = Math.floor(Math.log(bytes) / Math.log(1024));
+  if (i >= units.length) i = units.length - 1;
+  return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+}
+
+function formatDateTime(isoStr) {
+  if (!isoStr) return '-';
+  var d = new Date(isoStr);
+  var pad = function(n) { return n < 10 ? '0' + n : n; };
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
+    pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+}
+
+function getStatusBadge(status) {
+  if (status === 'success') return '<span class="badge badge-enabled">成功</span>';
+  if (status === 'error') return '<span class="badge badge-disabled">失败</span>';
+  if (status === 'deploying') return '<span class="badge" style="background:#dbeafe;color:#1d4ed8;">部署中</span>';
+  return '<span class="badge badge-unassigned">' + status + '</span>';
+}
+
+var statsHistoryPage = 1;
+var statsHistoryTotal = 0;
+
+function loadStats() {
+  apiGet('/api/admin/stats', function(err, data) {
+    var loading = document.getElementById('statsLoading');
+    var content = document.getElementById('statsContent');
+
+    if (err) { loading.textContent = '加载失败: ' + err; return; }
+    loading.classList.add('hidden');
+    content.classList.remove('hidden');
+
+    var o = data.overview;
+    document.getElementById('statsGrid').innerHTML =
+      '<div class="stat-card"><div class="stat-num">' + o.totalDeploys + '</div><div class="stat-label">总部署数</div></div>' +
+      '<div class="stat-card"><div class="stat-num" style="color:var(--success)">' + o.successDeploys + '</div><div class="stat-label">成功</div></div>' +
+      '<div class="stat-card"><div class="stat-num" style="color:var(--error)">' + o.failedDeploys + '</div><div class="stat-label">失败</div></div>' +
+      '<div class="stat-card"><div class="stat-num">' + o.deployingDeploys + '</div><div class="stat-label">进行中</div></div>' +
+      '<div class="stat-card"><div class="stat-num">' + o.todayDeploys + '</div><div class="stat-label">今日部署</div></div>' +
+      '<div class="stat-card"><div class="stat-num">' + o.totalFileSizeMB + '</div><div class="stat-label">总流量 (MB)</div></div>';
+
+    var userList = document.getElementById('userStatsList');
+    if (data.userStats && data.userStats.length > 0) {
+      userList.innerHTML = '';
+      data.userStats.forEach(function(us) {
+        var div = document.createElement('div');
+        div.className = 'user-stat-row';
+        div.innerHTML = '<span class="us-name">' + esc(us.username) + '</span>' +
+          '<span class="us-counts">共 ' + us.total + ' 次 | 成功 ' + us.success + ' | 失败 ' + us.failed + '</span>';
+        userList.appendChild(div);
+      });
+    } else {
+      userList.innerHTML = '<div class="empty-text">暂无用户统计数据</div>';
+    }
+
+    var recentDiv = document.getElementById('recentDeploys');
+    if (data.recentDeploys && data.recentDeploys.length > 0) {
+      recentDiv.innerHTML = '';
+      data.recentDeploys.forEach(function(r) {
+        var div = document.createElement('div');
+        div.className = 'recent-item';
+        div.innerHTML = '<div class="ri-left">' +
+          '<span class="ri-user">' + esc(r.username) + '</span>' +
+          '<span class="ri-project">' + esc(r.projectId) + '</span>' +
+          getStatusBadge(r.status) +
+          '</div>' +
+          '<span class="ri-time">' + formatDateTime(r.createdAt) + '</span>';
+        recentDiv.appendChild(div);
+      });
+    } else {
+      recentDiv.innerHTML = '<div class="empty-text">暂无部署记录</div>';
+    }
+
+    loadHistoryPage(1);
+  });
+}
+
+function loadHistoryPage(page) {
+  statsHistoryPage = page;
+  var loadingEl = document.getElementById('historyLoading');
+  var listEl = document.getElementById('historyList');
+  var pagEl = document.getElementById('historyPagination');
+
+  loadingEl.classList.remove('hidden');
+  listEl.innerHTML = '';
+
+  apiGet('/api/admin/history?page=' + page + '&limit=20', function(err, data) {
+    loadingEl.classList.add('hidden');
+
+    if (err) { listEl.innerHTML = '<div class="empty-text">加载失败: ' + err + '</div>'; return; }
+
+    statsHistoryTotal = data.total;
+    listEl.innerHTML = '';
+
+    if (!data.records || data.records.length === 0) {
+      listEl.innerHTML = '<div class="empty-text">暂无部署记录</div>';
+    } else {
+      data.records.forEach(function(r) {
+        var div = document.createElement('div');
+        div.className = 'history-card';
+        div.innerHTML =
+          '<div class="hc-header">' +
+            '<strong>' + esc(r.username) + ' → ' + esc(r.projectId) + '</strong>' +
+            getStatusBadge(r.status) +
+          '</div>' +
+          '<div class="hc-body">' +
+            '<div><span class="hc-label">镜像</span>' + esc(r.imageName) + '</div>' +
+            '<div><span class="hc-label">域名</span>' + esc(r.subdomain) + '.aihubflux.com</div>' +
+            '<div><span class="hc-label">大小</span>' + formatSize(r.fileSize) + '</div>' +
+            (r.codeUsed ? '<div><span class="hc-label">兑换码</span><code style="font-size:11px;background:#f3f4f6;padding:1px 6px;border-radius:3px;">' + esc(r.codeUsed) + '</code></div>' : '') +
+            '<div><span class="hc-label">时间</span>' + formatDateTime(r.createdAt) + '</div>' +
+            (r.serviceUrl ? '<div><span class="hc-label">地址</span><a href="' + r.serviceUrl + '" target="_blank" style="color:var(--primary);font-size:12px;">' + r.serviceUrl + '</a></div>' : '') +
+            (r.error ? '<div style="color:var(--error);font-size:12px;grid-column:1/-1;">错误: ' + esc(r.error) + '</div>' : '') +
+          '</div>';
+        listEl.appendChild(div);
+      });
+    }
+
+    var totalPages = Math.ceil(statsHistoryTotal / 20) || 1;
+    pagEl.innerHTML =
+      '<button ' + (page <= 1 ? 'disabled' : '') + ' onclick="loadHistoryPage(' + (page - 1) + ')">上一页</button>' +
+      '<span>' + page + ' / ' + totalPages + '</span>' +
+      '<button ' + (page >= totalPages ? 'disabled' : '') + ' onclick="loadHistoryPage(' + (page + 1) + ')">下一页</button>';
+  });
 }
 
 loadUsers();
